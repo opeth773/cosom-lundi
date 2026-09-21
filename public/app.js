@@ -9,7 +9,7 @@ import {
   writeBatch, serverTimestamp, Timestamp, onSnapshot, query, orderBy, where, runTransaction, arrayUnion, arrayRemove
 } from 'https://www.gstatic.com/firebasejs/12.19.0/firebase-firestore.js';
 
-const APP_VERSION = '7.2.0';
+const APP_VERSION = '7.5.0';
 const root = document.getElementById('app');
 const modal = document.getElementById('modal');
 const toastEl = document.getElementById('toast');
@@ -80,8 +80,22 @@ async function boot() {
 
 async function registerShellServiceWorker() {
   if (!('serviceWorker' in navigator)) return;
-  try { await navigator.serviceWorker.register('/sw.js'); } catch (e) { console.warn('SW', e); }
+  try {
+    const registration = await navigator.serviceWorker.register('/sw.js', { updateViaCache: 'none' });
+    // Force a check at each app start. The worker no longer caches the app code,
+    // so a new deploy cannot leave users on an old app.js/styles.css combination.
+    registration.update().catch(() => {});
+  } catch (e) {
+    console.warn('SW', e);
+  }
 }
+
+// Some mobile/in-app browsers restore a frozen page from the back/forward cache.
+// Reloading only in that case guarantees that reopening COSOM gets the current release.
+window.addEventListener('pageshow', event => {
+  if (event.persisted) window.location.reload();
+});
+
 
 async function handleAuthChange(user) {
   clearSubscriptions();
@@ -417,14 +431,33 @@ function renderAssignmentGroup(title, type) {
   const players = activePlayers().filter(p => p.type === type);
   if (!players.length) return '';
   return `<h3>${title}</h3>${players.map(p => {
-    const team = state.assignments.get(p.id)?.team || 'absent';
-    const locked = state.currentMatch?.status === 'final' ? 'disabled' : '';
+    const assignment = state.assignments.get(p.id);
+    const team = assignment?.team || 'absent';
+    const position = matchPosition(p, assignment);
+    const basePosition = defaultMatchPosition(p);
+    const locked = state.currentMatch?.status === 'final';
+    const baseLabel = type==='sub'?'Remplaçant':type==='goalie'?'Gardien':'Régulier';
+    const roleLabel = team==='absent' ? '' : ` · ${position==='goalie'?'Gardien ce match':'Joueur ce match'}${position!==basePosition?' (changé)':''}`;
     return `<div class="assignment-row">
-      <div><div class="person-name">${playerName(p)}</div><div class="person-meta">${type==='sub'?'Remplaçant':type==='goalie'?'Gardien':'Régulier'}</div></div>
-      <div class="assign-buttons">
-        <button ${locked} data-action="assign" data-player="${p.id}" data-team="dark" class="${team==='dark'?'on-dark':''}" title="Foncés">F</button>
-        <button ${locked} data-action="assign" data-player="${p.id}" data-team="light" class="${team==='light'?'on-light':''}" title="Pâles">P</button>
-        <button ${locked} data-action="assign" data-player="${p.id}" data-team="absent" class="${team==='absent'?'on-absent':''}" title="Absent / non appelé">—</button>
+      <div class="assignment-person">
+        <div class="person-name">${playerName(p)}</div>
+        <div class="person-meta">${baseLabel}${roleLabel}</div>
+      </div>
+      <div class="assignment-actions">
+        <div class="assign-buttons" aria-label="Équipe de ${escAttr(playerName(p))}">
+          <button ${locked?'disabled':''} data-action="assign" data-player="${p.id}" data-team="dark" class="${team==='dark'?'on-dark':''}" title="Foncés">F</button>
+          <button ${locked?'disabled':''} data-action="assign" data-player="${p.id}" data-team="light" class="${team==='light'?'on-light':''}" title="Pâles">P</button>
+          <button ${locked?'disabled':''} data-action="assign" data-player="${p.id}" data-team="absent" class="${team==='absent'?'on-absent':''}" title="Absent / non appelé">—</button>
+        </div>
+        ${team!=='absent' ? `
+          <div class="match-position-control">
+            <span class="match-position-label">Position ce match</span>
+            <div class="position-buttons" role="group" aria-label="Position de ${escAttr(playerName(p))}">
+              <button type="button" class="${position==='skater'?'active':''}" data-action="match-position" data-player="${p.id}" data-position="skater" ${locked?'disabled':''}>Joueur</button>
+              <button type="button" class="${position==='goalie'?'active':''}" data-action="match-position" data-player="${p.id}" data-position="goalie" ${locked?'disabled':''}>Gardien</button>
+            </div>
+          </div>` : `
+          <div class="match-position-hint">Choisis F ou P pour régler sa position pour cette game.</div>`}
       </div>
     </div>`;
   }).join('')}`;
@@ -575,11 +608,15 @@ function renderPlayers() {
 function renderStats() {
   if (!state.stats && !state.statsLoading) queueMicrotask(loadStats);
   if (state.statsLoading || !state.stats) return '<div class="card empty">Calcul des statistiques…</div>';
-  const skaters = state.stats.players.filter(x=>x.type!=='goalie').sort((a,b)=>(b.points-a.points)||(b.goals-a.goals)||a.name.localeCompare(b.name));
-  const goalies = state.stats.players.filter(x=>x.type==='goalie').sort((a,b)=>(a.avg-b.avg)||a.name.localeCompare(b.name));
-  return `<div class="card"><h2>Statistiques de la saison</h2><div class="kpi-grid"><div class="kpi"><strong>${state.stats.finalMatches}</strong><span>matchs</span></div><div class="kpi"><strong>${state.stats.totalGoals}</strong><span>buts</span></div><div class="kpi"><strong>${activePlayers().length}</strong><span>joueurs actifs</span></div></div></div>
-    <div class="card"><h3 style="margin-top:0">Joueurs</h3>${skaters.length?`<table><thead><tr><th>Joueur</th><th>MJ</th><th>B</th><th>A</th><th>PTS</th><th>ABS</th></tr></thead><tbody>${skaters.map(s=>`<tr><td>${esc(s.name)}</td><td>${s.gp}</td><td>${s.goals}</td><td>${s.assists}</td><td><strong>${s.points}</strong></td><td>${s.absences}</td></tr>`).join('')}</tbody></table>`:'<div class="empty">Aucune statistique.</div>'}</div>
-    <div class="card"><h3 style="margin-top:0">Gardiens</h3>${goalies.length?`<table><thead><tr><th>Gardien</th><th>MJ</th><th>BA</th><th>MOY</th><th>ABS</th></tr></thead><tbody>${goalies.map(s=>`<tr><td>${esc(s.name)}</td><td>${s.gp}</td><td>${s.ga}</td><td><strong>${s.avg.toFixed(2).replace('.',',')}</strong></td><td>${s.absences}</td></tr>`).join('')}</tbody></table>`:'<div class="empty">Aucun gardien.</div>'}</div>
+  const skaters = state.stats.players
+    .filter(x=>x.type!=='goalie' || x.skaterGp>0 || x.goals>0 || x.assists>0)
+    .sort((a,b)=>(b.points-a.points)||(b.goals-a.goals)||a.name.localeCompare(b.name));
+  const goalies = state.stats.players
+    .filter(x=>x.type==='goalie' || x.goalieGp>0)
+    .sort((a,b)=>(a.avg-b.avg)||a.name.localeCompare(b.name));
+  return `<div class="card"><h2>Statistiques de la saison</h2><div class="kpi-grid"><div class="kpi"><strong>${state.stats.finalMatches}</strong><span>matchs</span></div><div class="kpi"><strong>${state.stats.totalGoals}</strong><span>buts</span></div><div class="kpi"><strong>${activePlayers().length}</strong><span>joueurs actifs</span></div></div><p class="muted" style="margin-top:10px">Les matchs joués sont comptés selon la position de chaque match. Un joueur qui garde les buts une soirée apparaît donc aussi dans les statistiques des gardiens.</p></div>
+    <div class="card"><h3 style="margin-top:0">Joueurs</h3>${skaters.length?`<table><thead><tr><th>Joueur</th><th>MJ</th><th>B</th><th>A</th><th>PTS</th><th>ABS</th></tr></thead><tbody>${skaters.map(s=>`<tr><td>${esc(s.name)}</td><td>${s.skaterGp}</td><td>${s.goals}</td><td>${s.assists}</td><td><strong>${s.points}</strong></td><td>${s.absences}</td></tr>`).join('')}</tbody></table>`:'<div class="empty">Aucune statistique.</div>'}</div>
+    <div class="card"><h3 style="margin-top:0">Gardiens</h3>${goalies.length?`<table><thead><tr><th>Gardien</th><th>MJ</th><th>BA</th><th>MOY</th><th>ABS</th></tr></thead><tbody>${goalies.map(s=>`<tr><td>${esc(s.name)}</td><td>${s.goalieGp}</td><td>${s.ga}</td><td><strong>${s.avg.toFixed(2).replace('.',',')}</strong></td><td>${s.absences}</td></tr>`).join('')}</tbody></table>`:'<div class="empty">Aucun gardien.</div>'}</div>
     <div class="card"><h3 style="margin-top:0">Historique</h3>${state.stats.history.length?state.stats.history.map(h=>`<div class="list-row"><div><div class="person-name">${formatDate(h.startAt)}</div><div class="person-meta">Foncés ${h.dark} − ${h.light} Pâles</div></div><span class="pill">Final</span></div>`).join(''):'<div class="empty">Aucun match terminé.</div>'}</div>`;
 }
 
@@ -705,13 +742,13 @@ async function loadStats() {
   state.statsLoading = true; render();
   try {
     const finals = state.matches.filter(m=>m.status==='final');
-    const playerMap = new Map(state.players.map(p=>[p.id,{id:p.id,name:playerName(p),type:p.type,gp:0,goals:0,assists:0,points:0,absences:0,ga:0,avg:0}]));
+    const playerMap = new Map(state.players.map(p=>[p.id,{id:p.id,name:playerName(p),type:p.type,skaterGp:0,goalieGp:0,goals:0,assists:0,points:0,absences:0,ga:0,avg:0}]));
     const history = [];
     let totalGoals = 0;
     for (const m of finals) {
       const aSnap = await getDocs(collection(state.db,'leagues',state.leagueId,'matches',m.id,'assignments'));
       const gSnap = await getDocs(collection(state.db,'leagues',state.leagueId,'matches',m.id,'goals'));
-      const assignments = new Map(aSnap.docs.map(d=>[d.id,d.data().team]));
+      const assignments = new Map(aSnap.docs.map(d=>[d.id,d.data()]));
       const goals = gSnap.docs.map(d=>d.data());
       let dark=0, light=0;
       for (const g of goals) {
@@ -722,14 +759,23 @@ async function loadStats() {
       }
       for (const p of state.players) {
         const s = playerMap.get(p.id); if (!s || !playerWasActiveAtMatch(p, m)) continue;
-        const team = assignments.get(p.id);
-        if (team==='dark' || team==='light') s.gp++;
-        else if (p.type!=='sub') s.absences++;
-        if (p.type==='goalie' && (team==='dark'||team==='light')) s.ga += team==='dark'?light:dark;
+        const assignment = assignments.get(p.id);
+        const team = assignment?.team;
+        if (team==='dark' || team==='light') {
+          const position = matchPosition(p, assignment);
+          if (position==='goalie') {
+            s.goalieGp++;
+            s.ga += team==='dark'?light:dark;
+          } else {
+            s.skaterGp++;
+          }
+        } else if (p.type!=='sub') {
+          s.absences++;
+        }
       }
       history.push({startAt:m.startAt,dark,light});
     }
-    for (const s of playerMap.values()) { s.points=s.goals+s.assists; if(s.type==='goalie') s.avg=s.gp?s.ga/s.gp:0; }
+    for (const s of playerMap.values()) { s.points=s.goals+s.assists; s.avg=s.goalieGp?s.ga/s.goalieGp:0; }
     state.stats = {finalMatches:finals.length,totalGoals,players:[...playerMap.values()],history:history.sort((a,b)=>tsMillis(b.startAt)-tsMillis(a.startAt))};
   } catch (e) { handleError(e); state.stats={finalMatches:0,totalGoals:0,players:[],history:[]}; }
   finally { state.statsLoading=false; render(); }
@@ -758,6 +804,7 @@ root.addEventListener('click', async e => {
     else if (action==='new-player') openPlayerEditor();
     else if (action==='edit-player') openPlayerEditor(findPlayer(el.dataset.player));
     else if (action==='assign') await setAssignment(el.dataset.player,el.dataset.team);
+    else if (action==='match-position') await setMatchPosition(el.dataset.player,el.dataset.position);
     else if (action==='new-goal') openGoalEditor(el.dataset.team);
     else if (action==='edit-goal') { const g=state.goals.find(x=>x.id===el.dataset.goal); if(g) openGoalEditor(g.team,g); }
     else if (action==='toggle-clock') await toggleClock();
@@ -786,6 +833,7 @@ root.addEventListener('change', async e => {
       await updateDoc(doc(state.db,'leagues',state.leagueId,'members',e.target.dataset.member),{playerId:e.target.value||null,updatedAt:serverTimestamp(),updatedBy:state.user.uid});
       toast('Association mise à jour.');
     }
+    if (action==='match-position') await setMatchPosition(e.target.dataset.player,e.target.value);
   } catch (err) { handleError(err); }
 });
 
@@ -986,8 +1034,26 @@ async function savePlayer(fd,id) {
 async function setAssignment(playerId,team) {
   if(!state.currentMatch || state.currentMatch.status==='final') return;
   const ref=doc(state.db,'leagues',state.leagueId,'matches',state.currentMatch.id,'assignments',playerId);
-  if(team==='absent') await deleteDoc(ref).catch(()=>{});
-  else await setDoc(ref,{playerId,team,updatedAt:serverTimestamp(),updatedBy:state.user.uid},{merge:true});
+  if(team==='absent') {
+    await deleteDoc(ref).catch(()=>{});
+    return;
+  }
+  const player=findPlayer(playerId);
+  if(!player) throw new Error('Joueur introuvable.');
+  const current=state.assignments.get(playerId);
+  const position=matchPosition(player,current);
+  await setDoc(ref,{playerId,team,position,updatedAt:serverTimestamp(),updatedBy:state.user.uid},{merge:true});
+}
+
+async function setMatchPosition(playerId,position) {
+  if(!state.currentMatch || state.currentMatch.status==='final') return;
+  if(!['skater','goalie'].includes(position)) throw new Error('Position invalide.');
+  const assignment=state.assignments.get(playerId);
+  if(!assignment || !['dark','light'].includes(assignment.team)) throw new Error('Assigne d’abord ce joueur à une équipe.');
+  await setDoc(doc(state.db,'leagues',state.leagueId,'matches',state.currentMatch.id,'assignments',playerId),{
+    playerId,team:assignment.team,position,updatedAt:serverTimestamp(),updatedBy:state.user.uid
+  },{merge:true});
+  toast(position==='goalie'?'Position : gardien pour ce match.':'Position : joueur pour ce match.');
 }
 
 function openGoalEditor(team,goal=null) {
@@ -1188,6 +1254,8 @@ async function playAlarm(){await unlockAudio();await requestWakeLock();if(!audio
 
 // ---------- Helpers ----------
 function activePlayers(){return state.players.filter(p=>p.active!==false);}
+function defaultMatchPosition(p){return p?.type==='goalie'?'goalie':'skater';}
+function matchPosition(p,assignment){return assignment?.position==='goalie'||assignment?.position==='skater'?assignment.position:defaultMatchPosition(p);}
 function playerWasActiveAtMatch(p,m){const when=tsMillis(m.startAt),created=tsMillis(p.createdAt),archived=tsMillis(p.archivedAt);return (!created||created<=when)&&(!archived||archived>when);}
 function findPlayer(id){return state.players.find(p=>p.id===id)||null;}
 function playerName(p){return p?[p.firstName,p.lastName].filter(Boolean).join(' '):'';}

@@ -224,7 +224,7 @@ function render() {
       <header class="header">
         <div class="header-row">
           <div class="grow">
-            <div class="logo">COSOM</div>
+            <div class="logo">Ligue cosom du lundi</div>
             <div class="header-meta">${esc(state.league.name || 'La ligue')} · ${esc(state.league.season || '')}</div>
           </div>
           <div class="header-actions">

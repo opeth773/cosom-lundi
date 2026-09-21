@@ -9,7 +9,7 @@ import {
   writeBatch, serverTimestamp, Timestamp, onSnapshot, query, orderBy, where, runTransaction, arrayUnion, arrayRemove
 } from 'https://www.gstatic.com/firebasejs/12.19.0/firebase-firestore.js';
 
-const APP_VERSION = '7.0.0';
+const APP_VERSION = '7.2.0';
 const root = document.getElementById('app');
 const modal = document.getElementById('modal');
 const toastEl = document.getElementById('toast');
@@ -129,7 +129,44 @@ async function handleAuthChange(user) {
       }
       return renderLeagueChooser([]);
     }
+
+    // Migration/recovery for leagues created before /app/config existed.
+    // The old versions stored a membership pointer under users/{uid}/leagues/{leagueId}.
+    // Never interpret a missing global pointer as "the league was deleted".
     state.appConfig = null;
+    const legacyMemberships = await getDocs(collection(state.db, 'users', user.uid, 'leagues'));
+    const legacyLeagueIds = legacyMemberships.docs.map(d => d.id);
+    for (const leagueId of legacyLeagueIds) {
+      try {
+        const leagueSnap = await getDoc(doc(state.db, 'leagues', leagueId));
+        if (!leagueSnap.exists()) continue;
+        const leagueData = leagueSnap.data();
+
+        // The owner can safely recreate the single global pointer. This does not
+        // modify or recreate the league itself; it only points the app back to it.
+        if (leagueData.ownerUid === user.uid) {
+          try {
+            await setDoc(doc(state.db, 'app', 'config'), {
+              leagueId,
+              ownerUid: user.uid,
+              recoveredAt: serverTimestamp()
+            });
+            state.appConfig = {leagueId, ownerUid:user.uid};
+          } catch (recoveryError) {
+            console.warn('Global league pointer recovery', recoveryError);
+          }
+        }
+
+        // Existing members must still be able to open their original league even
+        // while the owner is repairing an older installation.
+        return selectLeague(leagueId);
+      } catch (legacyError) {
+        console.warn('Legacy league recovery', legacyError);
+      }
+    }
+
+    // No existing membership was found for this account. Do not claim that an
+    // existing league has vanished; this is only the first-time setup path.
     return renderLeagueChooser([]);
   } catch (e) {
     handleError(e);

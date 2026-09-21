@@ -1,4 +1,4 @@
-const CACHE = 'cosom-shell-v7';
+const CACHE = 'cosom-shell-v7.2';
 const SHELL = [
   '/', '/index.html', '/styles.css', '/app.js',
   '/manifest.webmanifest', '/icons/icon-192.png', '/icons/icon-512.png'

@@ -527,7 +527,7 @@ async function renderLeagueChooser(knownIds = null) {
     try { const s = await getDoc(doc(state.db,'leagues',id)); if (s.exists()) leagues.push({id:s.id,...s.data()}); } catch {}
   }
   state.leagueId = null;
-  root.innerHTML = `<div class="auth-wrap"><div class="auth-card" style="width:min(520px,100%)"><div class="row between"><div><div class="logo">COSOM</div><div class="muted">${esc(userDisplayName())}</div></div><button class="btn small ghost" data-action="logout">Sortir</button></div>
+  root.innerHTML = `<div class="auth-wrap"><div class="auth-card" style="width:min(520px,100%)"><div class="row between"><div><div class="logo">Ligue cosom du lundi</div><div class="muted">${esc(userDisplayName())}</div></div><button class="btn small ghost" data-action="logout">Sortir</button></div>
     <h2>Mes ligues</h2>${leagues.length?leagues.map(l=>`<div class="league-card"><div><strong>${esc(l.name)}</strong><div class="muted">${esc(l.season||'')}</div></div><button class="btn primary" data-action="open-league" data-league="${l.id}">Ouvrir</button></div>`).join(''):'<div class="empty">Aucune ligue pour l’instant.</div>'}
     <div class="grid2 stack-mobile" style="margin-top:14px"><button class="btn primary" data-action="create-league">Créer une ligue</button><button class="btn" data-action="join-league">Joindre avec un code</button></div>
   </div></div>`;

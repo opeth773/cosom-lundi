@@ -9,6 +9,7 @@ import {
   writeBatch, serverTimestamp, Timestamp, onSnapshot, query, orderBy, runTransaction
 } from 'https://www.gstatic.com/firebasejs/12.19.0/firebase-firestore.js';
 
+const APP_VERSION = '5.0.0';
 const root = document.getElementById('app');
 const modal = document.getElementById('modal');
 const toastEl = document.getElementById('toast');
@@ -21,6 +22,7 @@ const state = {
   firebaseApp: null,
   user: null,
   userProfile: null,
+  appConfig: null,
   leagueId: null,
   league: null,
   member: null,
@@ -224,11 +226,11 @@ function render() {
       <header class="header">
         <div class="header-row">
           <div class="grow">
-            <div class="logo">Ligue cosom du lundi</div>
+            <div class="logo">COSOM</div>
             <div class="header-meta">${esc(state.league.name || 'La ligue')} · ${esc(state.league.season || '')}</div>
           </div>
           <div class="header-actions">
-            <button class="btn small" data-action="switch-league" title="Changer de ligue">⇄</button>
+            <span class="role-badge ${isAdmin()?'admin':'member'}">${isAdmin()?'ADMIN':'MEMBRE'}</span>
             <button class="btn small ghost" data-action="logout" title="Déconnexion">Sortir</button>
           </div>
         </div>
@@ -239,7 +241,7 @@ function render() {
         ${navButton('calendar','▦','Calendrier')}
         ${navButton('players','👥','Joueurs')}
         ${navButton('stats','▥','Stats')}
-        ${navButton('settings','⚙','Réglages')}
+        ${navButton('settings','⚙',isAdmin()?'Admin':'Compte')}
       </nav>
     </div>`;
   requestAnimationFrame(updateClockDisplay);
@@ -373,7 +375,7 @@ function renderCalendar() {
     <div class="card">
       <div class="row between"><div><h2 style="margin:0">Calendrier</h2><div class="muted">La ligue joue tous les lundis. Tu peux répondre pour n’importe quel match futur.</div></div></div>
     </div>
-    ${!mine?`<div class="notice alert">Ton compte n’est pas encore associé à un joueur. Va dans <strong>Joueurs</strong> et choisis « Mon compte correspond à » pour confirmer tes présences ou tes absences.</div>`:''}
+    ${!mine?`<div class="notice alert">Ton compte n’est pas encore associé à un joueur. Un administrateur doit associer ton compte à ton nom avant que tu puisses confirmer tes présences ou tes absences.</div>`:''}
     ${groups.length ? groups.map(([label,matches])=>`<div class="card calendar-month"><h3>${esc(label)}</h3>${matches.map(m=>renderCalendarRow(m,mine)).join('')}</div>`).join('') : '<div class="card empty">Aucun match futur au calendrier.</div>'}
     ${state.currentMatch && state.currentMatch.status!=='final' ? renderSelectedAttendanceDetails() : ''}`;
 }
@@ -473,15 +475,16 @@ function groupMatchesByMonth(matches) {
 
 function renderPlayers() {
   const types = {regular:'Joueurs réguliers',goalie:'Gardiens',sub:'Remplaçants'};
-  const mine = state.member?.playerId || '';
-  const active = activePlayers();
-  const options = active.map(p=>`<option value="${p.id}" ${p.id===mine?'selected':''}>${esc(playerName(p))} · ${p.type==='goalie'?'Gardien':p.type==='sub'?'Remplaçant':'Régulier'}</option>`).join('');
-  const players = active.filter(p=>p.type===state.playerTab);
-  return `<div class="card"><h2>Mon joueur</h2><label>Mon compte correspond à</label><select data-change="link-player"><option value="">Aucun / organisateur seulement</option>${options}</select></div>
+  const linked = state.member?.playerId ? findPlayer(state.member.playerId) : null;
+  const players = activePlayers().filter(p=>p.type===state.playerTab);
+  return `<div class="card"><h2>Mon joueur</h2>${linked
+      ? `<div class="notice good"><strong>${esc(playerName(linked))}</strong><br>${linked.type==='goalie'?'Gardien':linked.type==='sub'?'Remplaçant':'Joueur régulier'} · compte associé</div>`
+      : `<div class="notice alert">Ton compte n’est pas encore associé à un joueur. ${isAdmin()?'Fais l’association dans l’onglet Admin.':'Un administrateur doit associer ton compte à ton nom avant que tu puisses répondre à tes présences.'}</div>`}
+    </div>
     <div class="card">
       <div class="row between"><h2 style="margin:0">Joueurs</h2>${isAdmin()?'<button class="btn primary" data-action="new-player">+ Ajouter</button>':''}</div>
       <div class="segment" style="margin-top:12px">${Object.entries(types).map(([k,v])=>`<button data-player-tab="${k}" class="${state.playerTab===k?'active':''}">${v}</button>`).join('')}</div>
-      ${players.length?players.map(p=>`<div class="list-row"><div><div class="person-name">${playerName(p)}</div><div class="person-meta">${p.firstName} · ${p.lastName}</div></div>${isAdmin()?`<button class="btn small ghost" data-action="edit-player" data-player="${p.id}">Modifier</button>`:''}</div>`).join(''):'<div class="empty">Aucun joueur dans cette catégorie.</div>'}
+      ${players.length?players.map(p=>`<div class="list-row"><div><div class="person-name">${playerName(p)}</div><div class="person-meta">${p.type==='goalie'?'Gardien':p.type==='sub'?'Remplaçant':'Régulier'}</div></div>${isAdmin()?`<button class="btn small ghost" data-action="edit-player" data-player="${p.id}">Modifier</button>`:''}</div>`).join(''):'<div class="empty">Aucun joueur dans cette catégorie.</div>'}
     </div>`;
 }
 
@@ -498,16 +501,34 @@ function renderStats() {
 
 function renderSettings() {
   const admin = isAdmin();
+  const linked = state.member?.playerId ? findPlayer(state.member.playerId) : null;
   const invite = state.league.inviteCode || '—';
-  return `<div class="card"><h2>${esc(state.league.name)}</h2><p class="muted">${esc(state.league.season||'')}</p><div class="invite-code">${esc(invite)}</div><button class="btn wide" data-action="copy-invite">Copier le code d’invitation</button></div>
-    ${admin?`<div class="card"><h3 style="margin-top:0">Configuration des matchs</h3><form data-form="league-settings"><label>Nombre de périodes</label><input name="periodCount" type="number" min="1" max="9" value="${state.league.settings?.periodCount||3}" required><label>Durée d’une période (minutes)</label><input name="periodMinutes" type="number" min="1" max="120" value="${state.league.settings?.periodMinutes||20}" required><label>Heure habituelle du lundi</label><input name="gameTime" type="time" value="${escAttr(state.league.settings?.gameTime||'20:00')}" required><label>Nombre de semaines créées d’avance</label><input name="scheduleWeeks" type="number" min="8" max="52" value="${state.league.settings?.scheduleWeeks||44}" required><p class="muted">Le calendrier crée automatiquement les lundis futurs. Tu peux toujours ajouter un match manuel au besoin.</p><button class="btn primary wide" style="margin-top:12px">Enregistrer</button></form></div>`:''}
-    <div class="card"><h3 style="margin-top:0">Données</h3><button class="btn wide" data-action="export-json">Exporter la ligue en JSON</button><p class="muted">Export des joueurs, matchs, alignements, réponses et buts pour avoir une copie locale de la base.</p></div>
-    <div class="card"><h3 style="margin-top:0">Compte</h3><p>${esc(userDisplayName())}<br><span class="muted">${esc(state.user.email||'')}</span></p><button class="btn" data-action="logout">Déconnexion</button></div>`;
+  const members = [...state.members].sort((a,b)=>{
+    if(a.id===state.league.ownerUid) return -1;
+    if(b.id===state.league.ownerUid) return 1;
+    if(a.role!==b.role) return a.role==='admin'?-1:1;
+    return String(a.displayName||'').localeCompare(String(b.displayName||''),'fr');
+  });
+  const playerOptions = activePlayers().map(p=>`<option value="${p.id}">${esc(playerName(p))} · ${p.type==='goalie'?'Gardien':p.type==='sub'?'Remplaçant':'Régulier'}</option>`).join('');
+  return `${admin?`<div class="card admin-card"><div class="row between"><div><h2 style="margin:0">Mode administrateur</h2><div class="muted">Gestion de la ligue et des comptes</div></div><span class="role-badge admin">ADMIN</span></div></div>
+    <div class="card"><h3 style="margin-top:0">Comptes et rôles</h3><p class="muted">Tu associes ici chaque compte à son joueur. Les comptes normaux ne peuvent pas modifier eux-mêmes cette association.</p>
+      ${members.length?members.map(m=>{
+        const owner=m.id===state.league.ownerUid;
+        const me=m.id===state.user.uid;
+        return `<div class="member-admin-row"><div class="member-admin-head"><div class="grow"><div class="person-name">${esc(m.displayName||'Membre')}</div><div class="person-meta">${esc(m.email||'')}${owner?' · Propriétaire':m.role==='admin'?' · Administrateur':' · Compte normal'}</div></div>${owner?'<span class="pill live">Propriétaire</span>':m.role==='admin'?'<span class="pill live">Admin</span>':'<span class="pill">Normal</span>'}</div>
+          <div class="member-admin-controls"><select data-change="member-player" data-member="${m.id}"><option value="">Aucun joueur associé</option>${activePlayers().map(p=>`<option value="${p.id}" ${m.playerId===p.id?'selected':''}>${esc(playerName(p))} · ${p.type==='goalie'?'Gardien':p.type==='sub'?'Remplaçant':'Régulier'}</option>`).join('')}</select>
+          ${!owner && !me ? `<button class="btn small ${m.role==='admin'?'warn':'primary'}" data-action="set-member-role" data-member="${m.id}" data-role="${m.role==='admin'?'member':'admin'}">${m.role==='admin'?'Remettre normal':'Nommer admin'}</button>`:''}</div></div>`;
+      }).join(''):'<div class="empty">Aucun compte.</div>'}
+    </div>
+    <div class="card"><h3 style="margin-top:0">Invitation</h3><p class="muted">Les nouveaux comptes peuvent uniquement rejoindre cette ligue avec ce code.</p><div class="invite-code">${esc(invite)}</div><button class="btn wide" data-action="copy-invite">Copier le code d’invitation</button></div>
+    <div class="card"><h3 style="margin-top:0">Configuration des matchs</h3><form data-form="league-settings"><label>Nombre de périodes</label><input name="periodCount" type="number" min="1" max="9" value="${state.league.settings?.periodCount||3}" required><label>Durée d’une période (minutes)</label><input name="periodMinutes" type="number" min="1" max="120" value="${state.league.settings?.periodMinutes||20}" required><label>Heure habituelle du lundi</label><input name="gameTime" type="time" value="${escAttr(state.league.settings?.gameTime||'20:00')}" required><label>Nombre de semaines créées d’avance</label><input name="scheduleWeeks" type="number" min="8" max="52" value="${state.league.settings?.scheduleWeeks||44}" required><p class="muted">Le calendrier crée automatiquement les lundis futurs. Tu peux toujours ajouter un match manuel au besoin.</p><button class="btn primary wide" style="margin-top:12px">Enregistrer</button></form></div>
+    <div class="card"><h3 style="margin-top:0">Données</h3><button class="btn wide" data-action="export-json">Exporter la ligue en JSON</button><p class="muted">Copie locale des joueurs, matchs, alignements, réponses et buts.</p></div>`:''}
+    <div class="card"><h3 style="margin-top:0">Mon compte</h3><div class="row between"><div><strong>${esc(userDisplayName())}</strong><br><span class="muted">${esc(state.user.email||'')}</span></div><span class="role-badge ${admin?'admin':'member'}">${admin?'Administrateur':'Compte normal'}</span></div><p class="muted" style="margin-top:12px">${linked?`Associé à ${esc(playerName(linked))}.`:'Aucun joueur associé à ce compte.'}</p><p class="muted">Cosom v${APP_VERSION}</p><button class="btn" data-action="logout">Déconnexion</button></div>`;
 }
 
 function renderAuth() {
   const reg = state.authMode === 'register';
-  root.innerHTML = `<div class="auth-wrap"><div class="auth-card"><div class="auth-logo">C</div><h1>Ligue de cosom du lundi</h1><p class="muted">La ligue du lundi, synchronisée sur tous les appareils.</p>
+  root.innerHTML = `<div class="auth-wrap"><div class="auth-card"><div class="auth-logo">C</div><h1>Cosom</h1><p class="muted">La ligue du lundi, synchronisée sur tous les appareils.</p>
     <button class="btn google wide" data-action="google-login"><span class="google-g">G</span> Continuer avec Google</button>
     <div class="auth-divider"><span>ou avec un courriel</span></div>
     <div class="segment"><button data-auth-mode="login" class="${!reg?'active':''}">Connexion</button><button data-auth-mode="register" class="${reg?'active':''}">Créer un compte</button></div>
@@ -526,10 +547,32 @@ async function renderLeagueChooser(knownIds = null) {
   for (const id of leagueIds) {
     try { const s = await getDoc(doc(state.db,'leagues',id)); if (s.exists()) leagues.push({id:s.id,...s.data()}); } catch {}
   }
+  let appConfig = null;
+  try {
+    const cfg = await getDoc(doc(state.db,'app','config'));
+    if (cfg.exists()) appConfig = cfg.data();
+  } catch (e) { console.warn('App config',e); }
+  state.appConfig = appConfig;
+
+  // Compatibilité si une ligue avait été créée avant l'ajout du verrou global.
+  if (!appConfig && leagues.length) {
+    const owned = leagues.find(l=>l.ownerUid===state.user.uid);
+    if (owned) {
+      try {
+        await setDoc(doc(state.db,'app','config'),{leagueId:owned.id,ownerUid:state.user.uid,createdAt:serverTimestamp()});
+        appConfig = {leagueId:owned.id,ownerUid:state.user.uid};
+        state.appConfig = appConfig;
+      } catch (e) { console.warn('Bootstrap config',e); }
+    }
+  }
+
   state.leagueId = null;
-  root.innerHTML = `<div class="auth-wrap"><div class="auth-card" style="width:min(520px,100%)"><div class="row between"><div><div class="logo">Ligue cosom du lundi</div><div class="muted">${esc(userDisplayName())}</div></div><button class="btn small ghost" data-action="logout">Sortir</button></div>
-    <h2>Mes ligues</h2>${leagues.length?leagues.map(l=>`<div class="league-card"><div><strong>${esc(l.name)}</strong><div class="muted">${esc(l.season||'')}</div></div><button class="btn primary" data-action="open-league" data-league="${l.id}">Ouvrir</button></div>`).join(''):'<div class="empty">Aucune ligue pour l’instant.</div>'}
-    <div class="grid2 stack-mobile" style="margin-top:14px"><button class="btn primary" data-action="create-league">Créer une ligue</button><button class="btn" data-action="join-league">Joindre avec un code</button></div>
+  const noLeagueYet = !appConfig;
+  root.innerHTML = `<div class="auth-wrap"><div class="auth-card" style="width:min(520px,100%)"><div class="row between"><div><div class="logo">COSOM</div><div class="muted">${esc(userDisplayName())}</div></div><button class="btn small ghost" data-action="logout">Sortir</button></div>
+    ${leagues.length?`<h2>Ma ligue</h2>${leagues.map(l=>`<div class="league-card"><div><strong>${esc(l.name)}</strong><div class="muted">${esc(l.season||'')}</div></div><button class="btn primary" data-action="open-league" data-league="${l.id}">Ouvrir</button></div>`).join('')}`:''}
+    ${!leagues.length && noLeagueYet ? `<h2>Créer la ligue</h2><p class="muted">Aucune ligue n’existe encore. Le premier compte qui la crée devient administrateur propriétaire.</p><button class="btn primary wide" data-action="create-league">Créer la ligue du lundi</button>` : ''}
+    ${!leagues.length && !noLeagueYet ? `<h2>Rejoindre la ligue</h2><p class="muted">La ligue existe déjà. Entre le code fourni par un administrateur.</p><button class="btn primary wide" data-action="join-league">Joindre avec un code</button>` : ''}
+    ${leagues.length && !noLeagueYet ? `<div class="notice" style="margin-top:14px">Cette application utilise une seule ligue. Les nouveaux membres la rejoignent avec le code d’invitation.</div>` : ''}
   </div></div>`;
 }
 
@@ -612,6 +655,7 @@ root.addEventListener('click', async e => {
     else if (action==='open-match-tab') { state.tab='match'; render(); }
     else if (action==='copy-invite') await copyInvite();
     else if (action==='export-json') await exportLeagueJson();
+    else if (action==='set-member-role') await setMemberRole(el.dataset.member,el.dataset.role);
   } catch (err) { handleError(err); }
 });
 
@@ -619,7 +663,11 @@ root.addEventListener('change', async e => {
   const action = e.target.dataset.change;
   try {
     if (action==='select-match' && e.target.value) selectMatch(e.target.value);
-    if (action==='link-player') await updateDoc(doc(state.db,'leagues',state.leagueId,'members',state.user.uid),{playerId:e.target.value||null,updatedAt:serverTimestamp()});
+    if (action==='member-player') {
+      if(!isAdmin()) throw new Error('Réservé aux administrateurs.');
+      await updateDoc(doc(state.db,'leagues',state.leagueId,'members',e.target.dataset.member),{playerId:e.target.value||null,updatedAt:serverTimestamp(),updatedBy:state.user.uid});
+      toast('Association mise à jour.');
+    }
   } catch (err) { handleError(err); }
 });
 
@@ -680,14 +728,17 @@ function openCreateLeague() {
 }
 
 async function createLeague(fd) {
+  const existing=await getDoc(doc(state.db,'app','config'));
+  if(existing.exists()) throw new Error('La ligue existe déjà. Utilise le code d’invitation pour la rejoindre.');
   const name=String(fd.get('name')||'').trim(); const season=String(fd.get('season')||'').trim();
   const leagueRef=doc(collection(state.db,'leagues')); const code=randomCode();
   const batch=writeBatch(state.db);
   batch.set(leagueRef,{name,season,ownerUid:state.user.uid,inviteCode:code,settings:{periodCount:3,periodMinutes:20,gameTime:'20:00',scheduleWeeks:44},createdAt:serverTimestamp()});
-  batch.set(doc(state.db,'leagues',leagueRef.id,'members',state.user.uid),{uid:state.user.uid,role:'admin',displayName:userDisplayName(),playerId:null,joinedAt:serverTimestamp()});
+  batch.set(doc(state.db,'leagues',leagueRef.id,'members',state.user.uid),{uid:state.user.uid,role:'admin',displayName:userDisplayName(),email:state.user.email||null,playerId:null,joinedAt:serverTimestamp()});
   batch.set(doc(state.db,'users',state.user.uid,'leagues',leagueRef.id),{leagueId:leagueRef.id,joinedAt:serverTimestamp()});
   batch.set(doc(state.db,'invites',code),{leagueId:leagueRef.id,leagueName:name,active:true,createdBy:state.user.uid,createdAt:serverTimestamp()});
-  await batch.commit(); modal.close(); await selectLeague(leagueRef.id); toast('Ligue créée.');
+  batch.set(doc(state.db,'app','config'),{leagueId:leagueRef.id,ownerUid:state.user.uid,createdAt:serverTimestamp()});
+  await batch.commit(); modal.close(); await selectLeague(leagueRef.id); toast('Ligue créée. Tu es administrateur.');
 }
 
 function openJoinLeague() {
@@ -699,10 +750,12 @@ async function joinLeague(fd) {
   const inviteSnap=await getDoc(doc(state.db,'invites',code));
   if(!inviteSnap.exists()||inviteSnap.data().active!==true) throw new Error('Code d’invitation invalide.');
   const leagueId=inviteSnap.data().leagueId;
+  const cfg=await getDoc(doc(state.db,'app','config'));
+  if(cfg.exists() && cfg.data().leagueId!==leagueId) throw new Error('Ce code ne correspond pas à la ligue de cette application.');
   const batch=writeBatch(state.db);
-  batch.set(doc(state.db,'leagues',leagueId,'members',state.user.uid),{uid:state.user.uid,role:'member',displayName:userDisplayName(),playerId:null,inviteCode:code,joinedAt:serverTimestamp()});
+  batch.set(doc(state.db,'leagues',leagueId,'members',state.user.uid),{uid:state.user.uid,role:'member',displayName:userDisplayName(),email:state.user.email||null,playerId:null,inviteCode:code,joinedAt:serverTimestamp()});
   batch.set(doc(state.db,'users',state.user.uid,'leagues',leagueId),{leagueId,joinedAt:serverTimestamp()});
-  await batch.commit(); modal.close(); await selectLeague(leagueId); toast('Ligue ajoutée.');
+  await batch.commit(); modal.close(); await selectLeague(leagueId); toast('Ligue rejointe avec un compte normal.');
 }
 
 function openNewMatch() {
@@ -825,6 +878,20 @@ async function setResponseForMatch(matchId,playerId,status) {
   toast(status==='yes'?'Présence confirmée.':status==='no'?'Absence enregistrée.':'Réponse mise à incertain.');
 }
 
+async function setMemberRole(uid, role) {
+  if(!isAdmin()) throw new Error('Réservé aux administrateurs.');
+  if(!['admin','member'].includes(role)) throw new Error('Rôle invalide.');
+  if(uid===state.league.ownerUid) throw new Error('Le propriétaire doit rester administrateur.');
+  if(uid===state.user.uid) throw new Error('Tu ne peux pas modifier ton propre rôle.');
+  const member = state.members.find(m=>m.id===uid);
+  if(!member) throw new Error('Compte introuvable.');
+  const label = member.displayName || 'ce membre';
+  const question = role==='admin' ? `Donner les droits administrateur à ${label}?` : `Remettre ${label} en compte normal?`;
+  if(!confirm(question)) return;
+  await updateDoc(doc(state.db,'leagues',state.leagueId,'members',uid),{role,updatedAt:serverTimestamp(),updatedBy:state.user.uid});
+  toast(role==='admin'?'Administrateur ajouté.':'Compte remis en mode normal.');
+}
+
 async function saveLeagueSettings(fd) {
   if(!isAdmin())return;
   const periodCount=Math.max(1,Math.min(9,Number(fd.get('periodCount'))));
@@ -890,6 +957,7 @@ async function copyInvite() {
 }
 
 async function exportLeagueJson() {
+  if(!isAdmin()) throw new Error('Réservé aux administrateurs.');
   const data={exportedAt:new Date().toISOString(),league:stripFirestore(state.league),players:state.players.map(stripFirestore),matches:[]};
   for(const m of state.matches){
     const a=await getDocs(collection(state.db,'leagues',state.leagueId,'matches',m.id,'assignments'));

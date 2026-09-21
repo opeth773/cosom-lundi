@@ -507,7 +507,7 @@ function renderSettings() {
 
 function renderAuth() {
   const reg = state.authMode === 'register';
-  root.innerHTML = `<div class="auth-wrap"><div class="auth-card"><div class="auth-logo">C</div><h1>Cosom</h1><p class="muted">La ligue du lundi, synchronisée sur tous les appareils.</p>
+  root.innerHTML = `<div class="auth-wrap"><div class="auth-card"><div class="auth-logo">C</div><h1>Ligue de cosom du lundi</h1><p class="muted">La ligue du lundi, synchronisée sur tous les appareils.</p>
     <button class="btn google wide" data-action="google-login"><span class="google-g">G</span> Continuer avec Google</button>
     <div class="auth-divider"><span>ou avec un courriel</span></div>
     <div class="segment"><button data-auth-mode="login" class="${!reg?'active':''}">Connexion</button><button data-auth-mode="register" class="${reg?'active':''}">Créer un compte</button></div>

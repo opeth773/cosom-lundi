@@ -1,0 +1,11 @@
+COSOM v6.0.0
+
+- Calendrier administrateur : bouton « + Ajouter un match » directement dans l'onglet Calendrier.
+- Un admin peut ajouter un match à n'importe quelle date/heure avec un lieu facultatif.
+- Un admin peut supprimer un match futur directement depuis le calendrier.
+- La suppression efface aussi les réponses, alignements et buts associés au match.
+- Si un lundi automatique est supprimé, la date est mémorisée dans settings.skippedDates et n'est pas recréée par le générateur automatique.
+- Si un admin recrée manuellement ce lundi plus tard, l'exclusion est retirée automatiquement.
+- Protection contre deux matchs futurs sur la même date.
+- Le fichier firestore.indexes.json revient aux indexes automatiques standards (aucune exemption startAt).
+- Cache PWA mis à jour vers v6.

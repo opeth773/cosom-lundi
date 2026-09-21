@@ -1,0 +1,8 @@
+COSOM v7.0.0
+- Nouveau compte: plus de création/jonction de ligue par code lorsque la ligue existe.
+- Un compte sans accès voit "Compte en attente" et est automatiquement placé dans les demandes d'accès.
+- Admin > Demandes d'accès: approuver/rejeter et associer immédiatement à un joueur existant.
+- Les comptes déjà créés avant v7 sont détectés dans /users et peuvent être approuvés sans réinscription.
+- Après approbation, un joueur connecté entre automatiquement dans la ligue.
+- Les règles Firestore ont été mises à jour pour ce flux d'approbation.
+- Cache PWA v7.

@@ -2,50 +2,124 @@ rules_version = '2';
 service cloud.firestore {
   match /databases/{database}/documents {
     function signedIn() { return request.auth != null; }
+    function appConfigPath() { return /databases/$(database)/documents/app/config; }
+    function appLeagueId() { return get(appConfigPath()).data.leagueId; }
     function leaguePath(leagueId) { return /databases/$(database)/documents/leagues/$(leagueId); }
     function memberPath(leagueId, uid) { return /databases/$(database)/documents/leagues/$(leagueId)/members/$(uid); }
     function isMember(leagueId) { return signedIn() && exists(memberPath(leagueId, request.auth.uid)); }
     function isAdmin(leagueId) { return isMember(leagueId) && get(memberPath(leagueId, request.auth.uid)).data.role == 'admin'; }
+    function ownerUid(leagueId) { return get(leaguePath(leagueId)).data.ownerUid; }
 
+    // Une seule ligue pour cette application. Le premier créateur devient propriétaire/admin.
+    match /app/{docId} {
+      allow read: if signedIn();
+      allow create: if signedIn()
+        && docId == 'config'
+        && !exists(appConfigPath())
+        && request.resource.data.ownerUid == request.auth.uid
+        && request.resource.data.leagueId is string
+        && getAfter(leaguePath(request.resource.data.leagueId)).data.ownerUid == request.auth.uid;
+      allow update, delete: if false;
+    }
+
+    // Chaque utilisateur gère son propre profil. Les admins peuvent lire les profils
+    // afin d'approuver les nouveaux comptes et de les associer au bon joueur.
     match /users/{uid} {
-      allow read, create, update: if signedIn() && request.auth.uid == uid;
+      allow create: if signedIn() && request.auth.uid == uid;
+      allow read: if signedIn() && (request.auth.uid == uid || (exists(appConfigPath()) && isAdmin(appLeagueId())));
+      allow update: if signedIn() && request.auth.uid == uid;
       allow delete: if false;
       match /leagues/{leagueId} {
         allow read, write: if signedIn() && request.auth.uid == uid;
       }
     }
 
+    // Un compte sans accès crée automatiquement une demande. L'admin peut l'approuver
+    // ou la refuser. Ceci fonctionne aussi pour les comptes déjà créés avant cette version.
+    match /accessRequests/{uid} {
+      allow create: if signedIn() && (
+        (
+          request.auth.uid == uid
+          && request.resource.data.uid == uid
+          && request.resource.data.status == 'pending'
+          && exists(appConfigPath())
+          && request.resource.data.leagueId == appLeagueId()
+        )
+        ||
+        (
+          request.resource.data.uid == uid
+          && request.resource.data.leagueId is string
+          && isAdmin(request.resource.data.leagueId)
+          && request.resource.data.status in ['approved', 'rejected']
+        )
+      );
+      allow read: if signedIn() && (
+        request.auth.uid == uid ||
+        (resource.data.leagueId is string && isAdmin(resource.data.leagueId))
+      );
+      allow update: if signedIn()
+        && resource.data.leagueId is string
+        && isAdmin(resource.data.leagueId)
+        && request.resource.data.uid == resource.data.uid
+        && request.resource.data.leagueId == resource.data.leagueId;
+      allow delete: if false;
+    }
+
+    // Conservé pour compatibilité avec les anciennes versions, mais le nouveau flux
+    // d'inscription n'utilise plus de code d'invitation.
     match /invites/{code} {
       allow read: if signedIn();
       allow create: if signedIn()
         && request.resource.data.createdBy == request.auth.uid
         && getAfter(leaguePath(request.resource.data.leagueId)).data.ownerUid == request.auth.uid;
       allow update, delete: if signedIn()
-        && get(leaguePath(resource.data.leagueId)).data.ownerUid == request.auth.uid;
+        && isAdmin(resource.data.leagueId);
     }
 
     match /leagues/{leagueId} {
-      allow create: if signedIn() && request.resource.data.ownerUid == request.auth.uid;
+      allow create: if signedIn()
+        && request.resource.data.ownerUid == request.auth.uid
+        && !exists(appConfigPath())
+        && getAfter(appConfigPath()).data.leagueId == leagueId
+        && getAfter(appConfigPath()).data.ownerUid == request.auth.uid;
       allow read: if isMember(leagueId);
       allow update, delete: if isAdmin(leagueId);
 
       match /members/{uid} {
-        allow read: if isMember(leagueId);
-        allow create: if signedIn() && request.auth.uid == uid && (
-          getAfter(leaguePath(leagueId)).data.ownerUid == request.auth.uid ||
+        // Un utilisateur peut vérifier si son propre compte a été approuvé.
+        allow read: if isMember(leagueId) || (signedIn() && request.auth.uid == uid);
+        allow create: if signedIn() && (
+          // Création initiale du propriétaire/admin.
           (
-            request.resource.data.inviteCode is string &&
-            exists(/databases/$(database)/documents/invites/$(request.resource.data.inviteCode)) &&
-            get(/databases/$(database)/documents/invites/$(request.resource.data.inviteCode)).data.active == true &&
-            get(/databases/$(database)/documents/invites/$(request.resource.data.inviteCode)).data.leagueId == leagueId
+            request.auth.uid == uid
+            && getAfter(leaguePath(leagueId)).data.ownerUid == request.auth.uid
+            && request.resource.data.role == 'admin'
+          )
+          ||
+          // Approbation d'un nouveau compte par un administrateur.
+          (
+            isAdmin(leagueId)
+            && request.resource.data.uid == uid
+            && request.resource.data.role in ['member', 'admin']
+          )
+          ||
+          // Ancien flux par code d'invitation, gardé pour compatibilité.
+          (
+            request.auth.uid == uid
+            && request.resource.data.role == 'member'
+            && request.resource.data.playerId == null
+            && request.resource.data.inviteCode is string
+            && exists(/databases/$(database)/documents/invites/$(request.resource.data.inviteCode))
+            && get(/databases/$(database)/documents/invites/$(request.resource.data.inviteCode)).data.active == true
+            && get(/databases/$(database)/documents/invites/$(request.resource.data.inviteCode)).data.leagueId == leagueId
           )
         );
-        allow update: if isAdmin(leagueId) || (
-          signedIn() && request.auth.uid == uid &&
-          request.resource.data.uid == resource.data.uid &&
-          request.resource.data.role == resource.data.role
-        );
-        allow delete: if isAdmin(leagueId) || (signedIn() && request.auth.uid == uid);
+        allow update: if isAdmin(leagueId)
+          && (
+            uid != ownerUid(leagueId)
+            || request.resource.data.role == 'admin'
+          );
+        allow delete: if isAdmin(leagueId) && uid != ownerUid(leagueId);
       }
 
       match /players/{playerId} {
@@ -72,7 +146,6 @@ service cloud.firestore {
           allow delete: if isAdmin(leagueId);
         }
       }
-
     }
   }
 }

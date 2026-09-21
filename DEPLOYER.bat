@@ -2,7 +2,7 @@
 setlocal
 cd /d "%~dp0"
 echo.
-echo COSOM - Deploiement Firebase
+echo COSOM - Deploiement vers https://cosomlundi.web.app
 where firebase >nul 2>nul
 if errorlevel 1 (
   echo Firebase CLI n'est pas installee.
@@ -23,22 +23,12 @@ call firebase login
 if errorlevel 1 goto error
 
 echo.
-echo Si aucun projet n'est encore lie, execute d'abord: firebase use --add
-call firebase use
-if errorlevel 1 (
-  echo.
-  echo Aucun projet lie. Selectionne ton projet maintenant.
-  call firebase use --add
-  if errorlevel 1 goto error
-)
-
-echo.
-echo Deploiement Hosting + Firestore...
-call firebase deploy --only hosting,firestore
+echo Deploiement sur cosomlundi.web.app + regles Firestore...
+call firebase deploy --project cosom-8ab4f --only hosting:app,firestore
 if errorlevel 1 goto error
 
 echo.
-echo TERMINE. L'adresse web.app est affichee ci-dessus.
+echo TERMINE : https://cosomlundi.web.app
 pause
 exit /b 0
 

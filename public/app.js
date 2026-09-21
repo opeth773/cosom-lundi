@@ -6,10 +6,10 @@ import {
 } from 'https://www.gstatic.com/firebasejs/12.19.0/firebase-auth.js';
 import {
   getFirestore, collection, doc, getDoc, getDocs, setDoc, addDoc, updateDoc, deleteDoc,
-  writeBatch, serverTimestamp, Timestamp, onSnapshot, query, orderBy, runTransaction
+  writeBatch, serverTimestamp, Timestamp, onSnapshot, query, orderBy, runTransaction, arrayUnion, arrayRemove
 } from 'https://www.gstatic.com/firebasejs/12.19.0/firebase-firestore.js';
 
-const APP_VERSION = '5.0.0';
+const APP_VERSION = '6.0.0';
 const root = document.getElementById('app');
 const modal = document.getElementById('modal');
 const toastEl = document.getElementById('toast');
@@ -373,7 +373,10 @@ function renderCalendar() {
   const groups = groupMatchesByMonth(upcoming);
   return `
     <div class="card">
-      <div class="row between"><div><h2 style="margin:0">Calendrier</h2><div class="muted">La ligue joue tous les lundis. Tu peux répondre pour n’importe quel match futur.</div></div></div>
+      <div class="row between calendar-heading">
+        <div><h2 style="margin:0">Calendrier</h2><div class="muted">La ligue joue habituellement le lundi. Les présences peuvent être données d’avance.</div></div>
+        ${isAdmin()?'<button class="btn primary" data-action="new-match">+ Ajouter un match</button>':''}
+      </div>
     </div>
     ${!mine?`<div class="notice alert">Ton compte n’est pas encore associé à un joueur. Un administrateur doit associer ton compte à ton nom avant que tu puisses confirmer tes présences ou tes absences.</div>`:''}
     ${groups.length ? groups.map(([label,matches])=>`<div class="card calendar-month"><h3>${esc(label)}</h3>${matches.map(m=>renderCalendarRow(m,mine)).join('')}</div>`).join('') : '<div class="card empty">Aucun match futur au calendrier.</div>'}
@@ -394,6 +397,7 @@ function renderCalendarRow(m, mine) {
       ${summary.subYesNames.length?`<div class="calendar-names"><strong>Remplaçants dispo :</strong> ${esc(summary.subYesNames.join(', '))}</div>`:''}
     </button>
     ${mine?`<div class="calendar-my"><div class="tiny">Moi : <strong>${esc(mineLabel)}</strong></div>${renderCalendarResponseButtons(m,mine,mineStatus)}</div>`:''}
+    ${isAdmin() && m.status==='scheduled'?`<div class="calendar-admin-actions"><button class="btn small danger" data-action="delete-calendar-match" data-match="${m.id}">Supprimer ce match</button></div>`:''}
   </div>`;
 }
 
@@ -521,7 +525,7 @@ function renderSettings() {
       }).join(''):'<div class="empty">Aucun compte.</div>'}
     </div>
     <div class="card"><h3 style="margin-top:0">Invitation</h3><p class="muted">Les nouveaux comptes peuvent uniquement rejoindre cette ligue avec ce code.</p><div class="invite-code">${esc(invite)}</div><button class="btn wide" data-action="copy-invite">Copier le code d’invitation</button></div>
-    <div class="card"><h3 style="margin-top:0">Configuration des matchs</h3><form data-form="league-settings"><label>Nombre de périodes</label><input name="periodCount" type="number" min="1" max="9" value="${state.league.settings?.periodCount||3}" required><label>Durée d’une période (minutes)</label><input name="periodMinutes" type="number" min="1" max="120" value="${state.league.settings?.periodMinutes||20}" required><label>Heure habituelle du lundi</label><input name="gameTime" type="time" value="${escAttr(state.league.settings?.gameTime||'20:00')}" required><label>Nombre de semaines créées d’avance</label><input name="scheduleWeeks" type="number" min="8" max="52" value="${state.league.settings?.scheduleWeeks||44}" required><p class="muted">Le calendrier crée automatiquement les lundis futurs. Tu peux toujours ajouter un match manuel au besoin.</p><button class="btn primary wide" style="margin-top:12px">Enregistrer</button></form></div>
+    <div class="card"><h3 style="margin-top:0">Configuration des matchs</h3><form data-form="league-settings"><label>Nombre de périodes</label><input name="periodCount" type="number" min="1" max="9" value="${state.league.settings?.periodCount||3}" required><label>Durée d’une période (minutes)</label><input name="periodMinutes" type="number" min="1" max="120" value="${state.league.settings?.periodMinutes||20}" required><label>Heure habituelle du lundi</label><input name="gameTime" type="time" value="${escAttr(state.league.settings?.gameTime||'20:00')}" required><label>Nombre de semaines créées d’avance</label><input name="scheduleWeeks" type="number" min="8" max="52" value="${state.league.settings?.scheduleWeeks||44}" required><p class="muted">Le calendrier crée automatiquement les lundis futurs. Dans Calendrier, un admin peut aussi ajouter un match manuel ou supprimer un lundi; un lundi supprimé ne sera pas recréé automatiquement.</p><button class="btn primary wide" style="margin-top:12px">Enregistrer</button></form></div>
     <div class="card"><h3 style="margin-top:0">Données</h3><button class="btn wide" data-action="export-json">Exporter la ligue en JSON</button><p class="muted">Copie locale des joueurs, matchs, alignements, réponses et buts.</p></div>`:''}
     <div class="card"><h3 style="margin-top:0">Mon compte</h3><div class="row between"><div><strong>${esc(userDisplayName())}</strong><br><span class="muted">${esc(state.user.email||'')}</span></div><span class="role-badge ${admin?'admin':'member'}">${admin?'Administrateur':'Compte normal'}</span></div><p class="muted" style="margin-top:12px">${linked?`Associé à ${esc(playerName(linked))}.`:'Aucun joueur associé à ce compte.'}</p><p class="muted">Cosom v${APP_VERSION}</p><button class="btn" data-action="logout">Déconnexion</button></div>`;
 }
@@ -638,6 +642,7 @@ root.addEventListener('click', async e => {
     else if (action==='create-league') openCreateLeague();
     else if (action==='join-league') openJoinLeague();
     else if (action==='new-match') openNewMatch();
+    else if (action==='delete-calendar-match') await deleteCalendarMatch(el.dataset.match);
     else if (action==='new-player') openPlayerEditor();
     else if (action==='edit-player') openPlayerEditor(findPlayer(el.dataset.player));
     else if (action==='assign') await setAssignment(el.dataset.player,el.dataset.team);
@@ -759,19 +764,61 @@ async function joinLeague(fd) {
 }
 
 function openNewMatch() {
-  const d=new Date(Date.now()+7*864e5); const date=d.toISOString().slice(0,10);
-  openModal(`<h2>Nouveau match</h2><form data-modal-form="new-match"><div class="grid2"><div><label>Date</label><input name="date" type="date" value="${date}" required></div><div><label>Heure</label><input name="time" type="time" value="20:00" required></div></div><label>Lieu</label><input name="location" placeholder="Gymnase / aréna"><div class="modal-actions"><button type="button" class="btn" data-modal-close>Annuler</button><button class="btn primary grow">Créer</button></div></form>`);
+  const nextMonday=getCurrentOrNextMonday();
+  const date=localDateKey(nextMonday);
+  const gameTime=String(state.league?.settings?.gameTime||'20:00');
+  openModal(`<h2>Ajouter un match</h2><form data-modal-form="new-match"><div class="grid2"><div><label>Date</label><input name="date" type="date" value="${date}" required></div><div><label>Heure</label><input name="time" type="time" value="${escAttr(gameTime)}" required></div></div><label>Lieu</label><input name="location" placeholder="Gymnase / aréna"><div class="notice">Tu peux ajouter un match n’importe quel jour. Si tu recrées manuellement un lundi que tu avais supprimé, cette date redevient active.</div><div class="modal-actions"><button type="button" class="btn" data-modal-close>Annuler</button><button class="btn primary grow">Créer</button></div></form>`);
 }
 
 async function createMatch(fd) {
-  if(!isAdmin()) throw new Error('Réservé aux organisateurs.');
-  const start=new Date(`${fd.get('date')}T${fd.get('time')}:00`);
-  const mins=Number(state.league.settings?.periodMinutes||20); const count=Number(state.league.settings?.periodCount||3);
-  const ref=await addDoc(collection(state.db,'leagues',state.leagueId,'matches'),{
+  if(!isAdmin()) throw new Error('Réservé aux administrateurs.');
+  const dateKey=String(fd.get('date')||'');
+  const time=String(fd.get('time')||'');
+  const start=new Date(`${dateKey}T${time}:00`);
+  if(Number.isNaN(start.getTime())) throw new Error('Date ou heure invalide.');
+  if(state.matches.some(m=>localDateKey(new Date(tsMillis(m.startAt)))===dateKey && m.status!=='final')) throw new Error('Un match existe déjà à cette date.');
+  const mins=Number(state.league.settings?.periodMinutes||20);
+  const count=Number(state.league.settings?.periodCount||3);
+  const ref=doc(collection(state.db,'leagues',state.leagueId,'matches'));
+  const batch=writeBatch(state.db);
+  batch.set(ref,{
     startAt:Timestamp.fromDate(start),location:String(fd.get('location')||'').trim(),status:'scheduled',period:1,periodCount:count,periodSeconds:mins*60,
-    clock:{running:false,remainingSeconds:mins*60,endsAt:null},startedAt:null,finalizedAt:null,alarmDeviceId:null,alarmDeviceName:null,createdAt:serverTimestamp(),createdBy:state.user.uid
+    clock:{running:false,remainingSeconds:mins*60,endsAt:null},startedAt:null,finalizedAt:null,alarmDeviceId:null,alarmDeviceName:null,attendance:{},autoScheduled:false,createdAt:serverTimestamp(),createdBy:state.user.uid
   });
-  modal.close(); selectMatch(ref.id); toast('Match créé.');
+  if(start.getDay()===1){
+    batch.update(doc(state.db,'leagues',state.leagueId),{'settings.skippedDates':arrayRemove(dateKey),updatedAt:serverTimestamp()});
+  }
+  await batch.commit();
+  modal.close(); selectMatch(ref.id); state.tab='calendar'; toast('Match ajouté au calendrier.');
+}
+
+async function deleteCalendarMatch(matchId) {
+  if(!isAdmin()) throw new Error('Réservé aux administrateurs.');
+  const match=state.matches.find(m=>m.id===matchId);
+  if(!match) throw new Error('Match introuvable.');
+  if(match.status!=='scheduled') throw new Error('Seul un match à venir peut être supprimé du calendrier.');
+  const dateKey=localDateKey(new Date(tsMillis(match.startAt)));
+  if(!confirm(`Supprimer le match du ${formatDate(match.startAt)}?\n\nLes réponses déjà enregistrées pour ce match seront aussi supprimées.`)) return;
+
+  const base=['leagues',state.leagueId,'matches',matchId];
+  const [assignments,responses,goals]=await Promise.all([
+    getDocs(collection(state.db,...base,'assignments')),
+    getDocs(collection(state.db,...base,'responses')),
+    getDocs(collection(state.db,...base,'goals'))
+  ]);
+  const batch=writeBatch(state.db);
+  for(const snap of [assignments,responses,goals]) for(const d of snap.docs) batch.delete(d.ref);
+  batch.delete(doc(state.db,...base));
+  const d=new Date(tsMillis(match.startAt));
+  if(d.getDay()===1){
+    batch.update(doc(state.db,'leagues',state.leagueId),{'settings.skippedDates':arrayUnion(dateKey),updatedAt:serverTimestamp()});
+  }
+  await batch.commit();
+  if(state.selectedMatchId===matchId){
+    clearMatchSubscriptions();
+    state.selectedMatchId=null; state.currentMatch=null; state.assignments=new Map(); state.responses=new Map(); state.goals=[];
+  }
+  toast(d.getDay()===1?'Match supprimé. Ce lundi restera exclu du calendrier automatique.':'Match supprimé.');
 }
 
 function openPlayerEditor(player=null) {
@@ -921,6 +968,7 @@ async function ensureMondaySchedule() {
   state.scheduleEnsuredKey=key;
 
   const existingDates=new Set(state.matches.map(m=>localDateKey(new Date(tsMillis(m.startAt)))));
+  const skippedDates=new Set(Array.isArray(state.league.settings?.skippedDates)?state.league.settings.skippedDates:[]);
   const mins=Number(state.league.settings?.periodMinutes||20);
   const count=Number(state.league.settings?.periodCount||3);
   const batch=writeBatch(state.db);
@@ -928,7 +976,7 @@ async function ensureMondaySchedule() {
   for(let i=0;i<weeks;i++){
     const d=new Date(first); d.setDate(first.getDate()+i*7);
     const dateKey=localDateKey(d);
-    if(existingDates.has(dateKey)) continue;
+    if(existingDates.has(dateKey) || skippedDates.has(dateKey)) continue;
     const start=new Date(`${dateKey}T${gameTime}:00`);
     const ref=doc(state.db,'leagues',state.leagueId,'matches',`monday-${dateKey}`);
     batch.set(ref,{

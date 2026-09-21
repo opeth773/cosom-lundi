@@ -7,11 +7,11 @@
       "indexes": [
         {
           "order": "ASCENDING",
-          "queryScope": "COLLECTION_GROUP"
+          "queryScope": "COLLECTION"
         },
         {
           "order": "DESCENDING",
-          "queryScope": "COLLECTION_GROUP"
+          "queryScope": "COLLECTION"
         }
       ]
     }

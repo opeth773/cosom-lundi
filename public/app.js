@@ -6,10 +6,10 @@ import {
 } from 'https://www.gstatic.com/firebasejs/12.19.0/firebase-auth.js';
 import {
   getFirestore, collection, doc, getDoc, getDocs, setDoc, addDoc, updateDoc, deleteDoc,
-  writeBatch, serverTimestamp, Timestamp, onSnapshot, query, orderBy, runTransaction, arrayUnion, arrayRemove
+  writeBatch, serverTimestamp, Timestamp, onSnapshot, query, orderBy, where, runTransaction, arrayUnion, arrayRemove
 } from 'https://www.gstatic.com/firebasejs/12.19.0/firebase-firestore.js';
 
-const APP_VERSION = '6.0.0';
+const APP_VERSION = '7.0.0';
 const root = document.getElementById('app');
 const modal = document.getElementById('modal');
 const toastEl = document.getElementById('toast');
@@ -27,6 +27,11 @@ const state = {
   league: null,
   member: null,
   members: [],
+  allUsers: [],
+  accessRequests: new Map(),
+  adminDirectoryLeagueId: null,
+  adminUnsubs: [],
+  accessWaitUnsub: null,
   players: [],
   matches: [],
   matchesLoaded: false,
@@ -85,6 +90,10 @@ async function handleAuthChange(user) {
   state.leagueId = null;
   state.league = null;
   state.member = null;
+  state.members = [];
+  state.allUsers = [];
+  state.accessRequests = new Map();
+  state.adminDirectoryLeagueId = null;
   state.players = [];
   state.matches = [];
   state.matchesLoaded = false;
@@ -108,19 +117,35 @@ async function handleAuthChange(user) {
       await setDoc(userRef, profile, {merge:true});
       state.userProfile = profile;
     }
-    const memberships = await getDocs(collection(state.db, 'users', user.uid, 'leagues'));
-    const leagueIds = memberships.docs.map(d => d.id);
-    if (leagueIds.length === 1) return selectLeague(leagueIds[0]);
-    return renderLeagueChooser(leagueIds);
+    const cfgSnap = await getDoc(doc(state.db, 'app', 'config'));
+    if (cfgSnap.exists()) {
+      state.appConfig = cfgSnap.data();
+      const leagueId = state.appConfig.leagueId;
+      try {
+        const memberSnap = await getDoc(doc(state.db, 'leagues', leagueId, 'members', user.uid));
+        if (memberSnap.exists()) return selectLeague(leagueId);
+      } catch (e) {
+        console.warn('Membership check', e);
+      }
+      return renderLeagueChooser([]);
+    }
+    state.appConfig = null;
+    return renderLeagueChooser([]);
   } catch (e) {
     handleError(e);
   }
 }
 
 function clearSubscriptions() {
-  [...state.leagueUnsubs, ...state.matchUnsubs].forEach(fn => { try { fn(); } catch {} });
+  [...state.leagueUnsubs, ...state.matchUnsubs, ...state.adminUnsubs].forEach(fn => { try { fn(); } catch {} });
+  if (state.accessWaitUnsub) { try { state.accessWaitUnsub(); } catch {} }
   state.leagueUnsubs = [];
   state.matchUnsubs = [];
+  state.adminUnsubs = [];
+  state.accessWaitUnsub = null;
+  state.adminDirectoryLeagueId = null;
+  state.allUsers = [];
+  state.accessRequests = new Map();
 }
 
 function clearMatchSubscriptions() {
@@ -152,7 +177,10 @@ async function selectLeague(leagueId) {
   }, handleError));
   state.leagueUnsubs.push(onSnapshot(memberRef, snap => {
     state.member = snap.exists() ? {id: snap.id, ...snap.data()} : null;
-    if (isAdmin()) queueMicrotask(() => ensureMondaySchedule().catch(handleError));
+    if (isAdmin()) {
+      queueMicrotask(() => ensureMondaySchedule().catch(handleError));
+      queueMicrotask(() => subscribeAdminDirectory(leagueId));
+    }
     render();
   }, handleError));
   state.leagueUnsubs.push(onSnapshot(query(collection(state.db, 'leagues', leagueId, 'players'), orderBy('lastName')), snap => {
@@ -174,6 +202,21 @@ async function selectLeague(leagueId) {
       state.currentMatch = null;
       clearMatchSubscriptions();
     }
+    render();
+  }, handleError));
+}
+
+function subscribeAdminDirectory(leagueId) {
+  if (!isAdmin() || state.adminDirectoryLeagueId === leagueId) return;
+  state.adminUnsubs.forEach(fn => { try { fn(); } catch {} });
+  state.adminUnsubs = [];
+  state.adminDirectoryLeagueId = leagueId;
+  state.adminUnsubs.push(onSnapshot(collection(state.db, 'users'), snap => {
+    state.allUsers = snap.docs.map(d => ({id:d.id, ...d.data()}));
+    render();
+  }, handleError));
+  state.adminUnsubs.push(onSnapshot(query(collection(state.db, 'accessRequests'), where('leagueId','==',leagueId)), snap => {
+    state.accessRequests = new Map(snap.docs.map(d => [d.id, {id:d.id, ...d.data()}]));
     render();
   }, handleError));
 }
@@ -506,16 +549,30 @@ function renderStats() {
 function renderSettings() {
   const admin = isAdmin();
   const linked = state.member?.playerId ? findPlayer(state.member.playerId) : null;
-  const invite = state.league.inviteCode || '—';
   const members = [...state.members].sort((a,b)=>{
     if(a.id===state.league.ownerUid) return -1;
     if(b.id===state.league.ownerUid) return 1;
     if(a.role!==b.role) return a.role==='admin'?-1:1;
     return String(a.displayName||'').localeCompare(String(b.displayName||''),'fr');
   });
-  const playerOptions = activePlayers().map(p=>`<option value="${p.id}">${esc(playerName(p))} · ${p.type==='goalie'?'Gardien':p.type==='sub'?'Remplaçant':'Régulier'}</option>`).join('');
+  const memberIds = new Set(state.members.map(m=>m.id));
+  const usedPlayerIds = new Set(state.members.map(m=>m.playerId).filter(Boolean));
+  const availablePlayers = activePlayers().filter(p=>!usedPlayerIds.has(p.id));
+  const pendingUsers = admin ? state.allUsers
+    .filter(u=>!memberIds.has(u.id))
+    .sort((a,b)=>String(a.displayName||a.email||'').localeCompare(String(b.displayName||b.email||''),'fr')) : [];
   return `${admin?`<div class="card admin-card"><div class="row between"><div><h2 style="margin:0">Mode administrateur</h2><div class="muted">Gestion de la ligue et des comptes</div></div><span class="role-badge admin">ADMIN</span></div></div>
-    <div class="card"><h3 style="margin-top:0">Comptes et rôles</h3><p class="muted">Tu associes ici chaque compte à son joueur. Les comptes normaux ne peuvent pas modifier eux-mêmes cette association.</p>
+    <div class="card"><h3 style="margin-top:0">Demandes d’accès</h3><p class="muted">Tout nouveau compte apparaît ici automatiquement. Choisis le joueur correspondant puis approuve-le. Il n’a pas besoin de se réinscrire.</p>
+      ${pendingUsers.length?pendingUsers.map(u=>{
+        const req=state.accessRequests.get(u.id);
+        const rejected=req?.status==='rejected';
+        return `<div class="member-admin-row"><div class="member-admin-head"><div class="grow"><div class="person-name">${esc(u.displayName||u.email||'Nouveau compte')}</div><div class="person-meta">${esc(u.email||'')}${rejected?' · Refusé':' · En attente'}</div></div><span class="pill ${rejected?'':'warn'}">${rejected?'Refusé':'En attente'}</span></div>
+          <form data-form="approve-access" data-user-id="${u.id}" class="member-admin-controls"><select name="playerId" required><option value="">Associer à un joueur…</option>${availablePlayers.map(p=>`<option value="${p.id}">${esc(playerName(p))} · ${p.type==='goalie'?'Gardien':p.type==='sub'?'Remplaçant':'Régulier'}</option>`).join('')}</select><button class="btn small primary" ${availablePlayers.length?'':'disabled'}>Approuver</button><button type="button" class="btn small warn" data-action="reject-access" data-user="${u.id}">Rejeter</button></form>
+          ${!availablePlayers.length?'<div class="tiny muted" style="margin-top:6px">Crée d’abord le joueur correspondant dans l’onglet Joueurs.</div>':''}
+        </div>`;
+      }).join(''):'<div class="empty">Aucun compte en attente.</div>'}
+    </div>
+    <div class="card"><h3 style="margin-top:0">Comptes et rôles</h3><p class="muted">Tu associes ici chaque compte approuvé à son joueur. Les comptes normaux ne peuvent pas modifier eux-mêmes cette association.</p>
       ${members.length?members.map(m=>{
         const owner=m.id===state.league.ownerUid;
         const me=m.id===state.user.uid;
@@ -524,7 +581,6 @@ function renderSettings() {
           ${!owner && !me ? `<button class="btn small ${m.role==='admin'?'warn':'primary'}" data-action="set-member-role" data-member="${m.id}" data-role="${m.role==='admin'?'member':'admin'}">${m.role==='admin'?'Remettre normal':'Nommer admin'}</button>`:''}</div></div>`;
       }).join(''):'<div class="empty">Aucun compte.</div>'}
     </div>
-    <div class="card"><h3 style="margin-top:0">Invitation</h3><p class="muted">Les nouveaux comptes peuvent uniquement rejoindre cette ligue avec ce code.</p><div class="invite-code">${esc(invite)}</div><button class="btn wide" data-action="copy-invite">Copier le code d’invitation</button></div>
     <div class="card"><h3 style="margin-top:0">Configuration des matchs</h3><form data-form="league-settings"><label>Nombre de périodes</label><input name="periodCount" type="number" min="1" max="9" value="${state.league.settings?.periodCount||3}" required><label>Durée d’une période (minutes)</label><input name="periodMinutes" type="number" min="1" max="120" value="${state.league.settings?.periodMinutes||20}" required><label>Heure habituelle du lundi</label><input name="gameTime" type="time" value="${escAttr(state.league.settings?.gameTime||'20:00')}" required><label>Nombre de semaines créées d’avance</label><input name="scheduleWeeks" type="number" min="8" max="52" value="${state.league.settings?.scheduleWeeks||44}" required><p class="muted">Le calendrier crée automatiquement les lundis futurs. Dans Calendrier, un admin peut aussi ajouter un match manuel ou supprimer un lundi; un lundi supprimé ne sera pas recréé automatiquement.</p><button class="btn primary wide" style="margin-top:12px">Enregistrer</button></form></div>
     <div class="card"><h3 style="margin-top:0">Données</h3><button class="btn wide" data-action="export-json">Exporter la ligue en JSON</button><p class="muted">Copie locale des joueurs, matchs, alignements, réponses et buts.</p></div>`:''}
     <div class="card"><h3 style="margin-top:0">Mon compte</h3><div class="row between"><div><strong>${esc(userDisplayName())}</strong><br><span class="muted">${esc(state.user.email||'')}</span></div><span class="role-badge ${admin?'admin':'member'}">${admin?'Administrateur':'Compte normal'}</span></div><p class="muted" style="margin-top:12px">${linked?`Associé à ${esc(playerName(linked))}.`:'Aucun joueur associé à ce compte.'}</p><p class="muted">Cosom v${APP_VERSION}</p><button class="btn" data-action="logout">Déconnexion</button></div>`;
@@ -540,44 +596,63 @@ function renderAuth() {
   </div></div>`;
 }
 
-async function renderLeagueChooser(knownIds = null) {
+async function renderLeagueChooser() {
   if (!state.user) return;
-  let leagueIds = knownIds;
-  if (!leagueIds) {
-    const snaps = await getDocs(collection(state.db, 'users', state.user.uid, 'leagues'));
-    leagueIds = snaps.docs.map(d=>d.id);
+  let appConfig = state.appConfig;
+  if (!appConfig) {
+    try {
+      const cfg = await getDoc(doc(state.db,'app','config'));
+      if (cfg.exists()) appConfig = cfg.data();
+    } catch (e) { console.warn('App config',e); }
   }
-  const leagues = [];
-  for (const id of leagueIds) {
-    try { const s = await getDoc(doc(state.db,'leagues',id)); if (s.exists()) leagues.push({id:s.id,...s.data()}); } catch {}
-  }
-  let appConfig = null;
-  try {
-    const cfg = await getDoc(doc(state.db,'app','config'));
-    if (cfg.exists()) appConfig = cfg.data();
-  } catch (e) { console.warn('App config',e); }
   state.appConfig = appConfig;
+  state.leagueId = null;
 
-  // Compatibilité si une ligue avait été créée avant l'ajout du verrou global.
-  if (!appConfig && leagues.length) {
-    const owned = leagues.find(l=>l.ownerUid===state.user.uid);
-    if (owned) {
-      try {
-        await setDoc(doc(state.db,'app','config'),{leagueId:owned.id,ownerUid:state.user.uid,createdAt:serverTimestamp()});
-        appConfig = {leagueId:owned.id,ownerUid:state.user.uid};
-        state.appConfig = appConfig;
-      } catch (e) { console.warn('Bootstrap config',e); }
-    }
+  if (!appConfig) {
+    root.innerHTML = `<div class="auth-wrap"><div class="auth-card" style="width:min(520px,100%)"><div class="row between"><div><div class="logo">COSOM</div><div class="muted">${esc(userDisplayName())}</div></div><button class="btn small ghost" data-action="logout">Sortir</button></div><h2>Créer la ligue</h2><p class="muted">Aucune ligue n’existe encore. Le premier compte qui la crée devient administrateur propriétaire.</p><button class="btn primary wide" data-action="create-league">Créer la ligue du lundi</button></div></div>`;
+    return;
   }
 
-  state.leagueId = null;
-  const noLeagueYet = !appConfig;
-  root.innerHTML = `<div class="auth-wrap"><div class="auth-card" style="width:min(520px,100%)"><div class="row between"><div><div class="logo">COSOM</div><div class="muted">${esc(userDisplayName())}</div></div><button class="btn small ghost" data-action="logout">Sortir</button></div>
-    ${leagues.length?`<h2>Ma ligue</h2>${leagues.map(l=>`<div class="league-card"><div><strong>${esc(l.name)}</strong><div class="muted">${esc(l.season||'')}</div></div><button class="btn primary" data-action="open-league" data-league="${l.id}">Ouvrir</button></div>`).join('')}`:''}
-    ${!leagues.length && noLeagueYet ? `<h2>Créer la ligue</h2><p class="muted">Aucune ligue n’existe encore. Le premier compte qui la crée devient administrateur propriétaire.</p><button class="btn primary wide" data-action="create-league">Créer la ligue du lundi</button>` : ''}
-    ${!leagues.length && !noLeagueYet ? `<h2>Rejoindre la ligue</h2><p class="muted">La ligue existe déjà. Entre le code fourni par un administrateur.</p><button class="btn primary wide" data-action="join-league">Joindre avec un code</button>` : ''}
-    ${leagues.length && !noLeagueYet ? `<div class="notice" style="margin-top:14px">Cette application utilise une seule ligue. Les nouveaux membres la rejoignent avec le code d’invitation.</div>` : ''}
-  </div></div>`;
+  await ensureAccessRequest(appConfig.leagueId);
+  watchAccessRequest(appConfig.leagueId);
+}
+
+async function ensureAccessRequest(leagueId) {
+  const ref = doc(state.db,'accessRequests',state.user.uid);
+  const snap = await getDoc(ref);
+  if (!snap.exists()) {
+    await setDoc(ref,{
+      uid:state.user.uid,
+      leagueId,
+      displayName:userDisplayName(),
+      email:state.user.email||null,
+      status:'pending',
+      createdAt:serverTimestamp()
+    });
+  }
+}
+
+function watchAccessRequest(leagueId) {
+  if (state.accessWaitUnsub) { try { state.accessWaitUnsub(); } catch {} }
+  const ref=doc(state.db,'accessRequests',state.user.uid);
+  state.accessWaitUnsub=onSnapshot(ref, async snap=>{
+    const req=snap.exists()?{id:snap.id,...snap.data()}:null;
+    if (req?.status==='approved') {
+      try {
+        const memberSnap=await getDoc(doc(state.db,'leagues',leagueId,'members',state.user.uid));
+        if(memberSnap.exists()) {
+          if(state.accessWaitUnsub){try{state.accessWaitUnsub();}catch{} state.accessWaitUnsub=null;}
+          return selectLeague(leagueId);
+        }
+      } catch(e){ console.warn('Approved membership check',e); }
+    }
+    renderPendingAccess(req);
+  },handleError);
+}
+
+function renderPendingAccess(req) {
+  const rejected=req?.status==='rejected';
+  root.innerHTML=`<div class="auth-wrap"><div class="auth-card" style="width:min(520px,100%)"><div class="row between"><div><div class="logo">COSOM</div><div class="muted">${esc(userDisplayName())}</div></div><button class="btn small ghost" data-action="logout">Sortir</button></div><h2>${rejected?'Accès refusé':'Compte en attente'}</h2>${rejected?`<div class="notice alert">Un administrateur a refusé l’accès de ce compte. Communique avec l’administrateur de la ligue si c’est une erreur.</div>`:`<div class="notice good">Ton compte est bien créé.</div><p>Un administrateur doit maintenant <strong>associer ton compte à ton joueur</strong> avant que tu puisses accéder à la ligue.</p><p class="muted">Tu n’as rien d’autre à faire et tu n’as pas à te réinscrire. Cette page s’ouvrira automatiquement dès que ton compte sera approuvé.</p>`}</div></div>`;
 }
 
 function renderBoot(text) {
@@ -661,6 +736,7 @@ root.addEventListener('click', async e => {
     else if (action==='copy-invite') await copyInvite();
     else if (action==='export-json') await exportLeagueJson();
     else if (action==='set-member-role') await setMemberRole(el.dataset.member,el.dataset.role);
+    else if (action==='reject-access') await rejectAccess(el.dataset.user);
   } catch (err) { handleError(err); }
 });
 
@@ -683,6 +759,7 @@ root.addEventListener('submit', async e => {
   try {
     if (form.dataset.form==='auth') await submitAuth(fd);
     if (form.dataset.form==='league-settings') await saveLeagueSettings(fd);
+    if (form.dataset.form==='approve-access') await approveAccess(form.dataset.userId,fd);
   } catch (err) { handleError(err); }
 });
 
@@ -761,6 +838,39 @@ async function joinLeague(fd) {
   batch.set(doc(state.db,'leagues',leagueId,'members',state.user.uid),{uid:state.user.uid,role:'member',displayName:userDisplayName(),email:state.user.email||null,playerId:null,inviteCode:code,joinedAt:serverTimestamp()});
   batch.set(doc(state.db,'users',state.user.uid,'leagues',leagueId),{leagueId,joinedAt:serverTimestamp()});
   await batch.commit(); modal.close(); await selectLeague(leagueId); toast('Ligue rejointe avec un compte normal.');
+}
+
+async function approveAccess(uid, fd) {
+  if(!isAdmin()) throw new Error('Réservé aux administrateurs.');
+  const playerId=String(fd.get('playerId')||'');
+  const player=findPlayer(playerId);
+  if(!player || player.archived) throw new Error('Choisis un joueur valide.');
+  const already=state.members.find(m=>m.playerId===playerId);
+  if(already) throw new Error('Ce joueur est déjà associé à un autre compte.');
+  const user=state.allUsers.find(u=>u.id===uid);
+  if(!user) throw new Error('Compte introuvable.');
+  const batch=writeBatch(state.db);
+  batch.set(doc(state.db,'leagues',state.leagueId,'members',uid),{
+    uid,role:'member',displayName:user.displayName||user.email||'Membre',email:user.email||null,playerId,
+    approvedAt:serverTimestamp(),approvedBy:state.user.uid,joinedAt:serverTimestamp()
+  });
+  batch.set(doc(state.db,'accessRequests',uid),{
+    uid,leagueId:state.leagueId,displayName:user.displayName||null,email:user.email||null,status:'approved',playerId,
+    reviewedAt:serverTimestamp(),reviewedBy:state.user.uid
+  },{merge:true});
+  await batch.commit();
+  toast(`${user.displayName||user.email||'Compte'} approuvé.`);
+}
+
+async function rejectAccess(uid) {
+  if(!isAdmin()) throw new Error('Réservé aux administrateurs.');
+  if(!confirm('Refuser l’accès de ce compte?')) return;
+  const user=state.allUsers.find(u=>u.id===uid);
+  await setDoc(doc(state.db,'accessRequests',uid),{
+    uid,leagueId:state.leagueId,displayName:user?.displayName||null,email:user?.email||null,status:'rejected',
+    reviewedAt:serverTimestamp(),reviewedBy:state.user.uid
+  },{merge:true});
+  toast('Accès refusé.');
 }
 
 function openNewMatch() {

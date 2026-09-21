@@ -1,5 +1,15 @@
 {
   "projects": {
     "default": "cosom-8ab4f"
-  }
+  },
+  "targets": {
+    "cosom-8ab4f": {
+      "hosting": {
+        "app": [
+          "cosomlundi"
+        ]
+      }
+    }
+  },
+  "etags": {}
 }

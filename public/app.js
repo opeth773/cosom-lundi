@@ -9,7 +9,7 @@ import {
   writeBatch, serverTimestamp, Timestamp, onSnapshot, query, orderBy, where, runTransaction, arrayUnion, arrayRemove
 } from 'https://www.gstatic.com/firebasejs/12.19.0/firebase-firestore.js';
 
-const APP_VERSION = '7.5.0';
+const APP_VERSION = '7.6.0';
 const root = document.getElementById('app');
 const modal = document.getElementById('modal');
 const toastEl = document.getElementById('toast');
@@ -236,6 +236,7 @@ async function selectLeague(leagueId) {
   }, handleError));
   state.leagueUnsubs.push(onSnapshot(query(collection(state.db, 'leagues', leagueId, 'players'), orderBy('lastName')), snap => {
     state.players = snap.docs.map(d => ({id:d.id, ...d.data()}));
+    state.stats = null;
     render();
   }, handleError));
   state.leagueUnsubs.push(onSnapshot(collection(state.db, 'leagues', leagueId, 'members'), snap => {
@@ -245,6 +246,7 @@ async function selectLeague(leagueId) {
   state.leagueUnsubs.push(onSnapshot(query(collection(state.db, 'leagues', leagueId, 'matches'), orderBy('startAt', 'desc')), snap => {
     state.matches = snap.docs.map(d => ({id:d.id, ...d.data()}));
     state.matchesLoaded = true;
+    state.stats = null;
     if (isAdmin()) queueMicrotask(() => ensureMondaySchedule().catch(handleError));
     const wanted = chooseDefaultMatch();
     if (wanted && wanted !== state.selectedMatchId) selectMatch(wanted);
@@ -299,6 +301,7 @@ function selectMatch(matchId) {
   }, handleError));
   state.matchUnsubs.push(onSnapshot(collection(state.db, ...base, 'assignments'), snap => {
     state.assignments = new Map(snap.docs.map(d => [d.id, {id:d.id, ...d.data()}]));
+    state.stats = null;
     render();
   }, handleError));
   state.matchUnsubs.push(onSnapshot(collection(state.db, ...base, 'responses'), snap => {
@@ -307,6 +310,7 @@ function selectMatch(matchId) {
   }, handleError));
   state.matchUnsubs.push(onSnapshot(query(collection(state.db, ...base, 'goals'), orderBy('createdAt', 'asc')), snap => {
     state.goals = snap.docs.map(d => ({id:d.id, ...d.data()}));
+    state.stats = null;
     render();
   }, handleError));
 }
@@ -435,7 +439,8 @@ function renderAssignmentGroup(title, type) {
     const team = assignment?.team || 'absent';
     const position = matchPosition(p, assignment);
     const basePosition = defaultMatchPosition(p);
-    const locked = state.currentMatch?.status === 'final';
+    const matchFinal = state.currentMatch?.status === 'final';
+    const positionLocked = matchFinal && !isAdmin();
     const baseLabel = type==='sub'?'Remplaçant':type==='goalie'?'Gardien':'Régulier';
     const roleLabel = team==='absent' ? '' : ` · ${position==='goalie'?'Gardien ce match':'Joueur ce match'}${position!==basePosition?' (changé)':''}`;
     return `<div class="assignment-row">
@@ -445,17 +450,18 @@ function renderAssignmentGroup(title, type) {
       </div>
       <div class="assignment-actions">
         <div class="assign-buttons" aria-label="Équipe de ${escAttr(playerName(p))}">
-          <button ${locked?'disabled':''} data-action="assign" data-player="${p.id}" data-team="dark" class="${team==='dark'?'on-dark':''}" title="Foncés">F</button>
-          <button ${locked?'disabled':''} data-action="assign" data-player="${p.id}" data-team="light" class="${team==='light'?'on-light':''}" title="Pâles">P</button>
-          <button ${locked?'disabled':''} data-action="assign" data-player="${p.id}" data-team="absent" class="${team==='absent'?'on-absent':''}" title="Absent / non appelé">—</button>
+          <button ${matchFinal?'disabled':''} data-action="assign" data-player="${p.id}" data-team="dark" class="${team==='dark'?'on-dark':''}" title="Foncés">F</button>
+          <button ${matchFinal?'disabled':''} data-action="assign" data-player="${p.id}" data-team="light" class="${team==='light'?'on-light':''}" title="Pâles">P</button>
+          <button ${matchFinal?'disabled':''} data-action="assign" data-player="${p.id}" data-team="absent" class="${team==='absent'?'on-absent':''}" title="Absent / non appelé">—</button>
         </div>
         ${team!=='absent' ? `
           <div class="match-position-control">
             <span class="match-position-label">Position ce match</span>
             <div class="position-buttons" role="group" aria-label="Position de ${escAttr(playerName(p))}">
-              <button type="button" class="${position==='skater'?'active':''}" data-action="match-position" data-player="${p.id}" data-position="skater" ${locked?'disabled':''}>Joueur</button>
-              <button type="button" class="${position==='goalie'?'active':''}" data-action="match-position" data-player="${p.id}" data-position="goalie" ${locked?'disabled':''}>Gardien</button>
+              <button type="button" class="${position==='skater'?'active':''}" data-action="match-position" data-player="${p.id}" data-position="skater" ${positionLocked?'disabled':''}>Joueur</button>
+              <button type="button" class="${position==='goalie'?'active':''}" data-action="match-position" data-player="${p.id}" data-position="goalie" ${positionLocked?'disabled':''}>Gardien</button>
             </div>
+            ${matchFinal && isAdmin()?'<div class="tiny muted">Correction admin : ce changement recalcule les stats de la saison.</div>':''}
           </div>` : `
           <div class="match-position-hint">Choisis F ou P pour régler sa position pour cette game.</div>`}
       </div>
@@ -465,14 +471,17 @@ function renderAssignmentGroup(title, type) {
 
 function renderGoals() {
   if (!state.goals.length) return '<div class="empty">Aucun but inscrit.</div>';
-  const sorted = [...state.goals].sort((a,b) => (a.period-b.period) || (a.elapsedSeconds-b.elapsedSeconds));
+  const sorted = [...state.goals].sort((a,b) => (a.period-b.period) || ((a.elapsedSeconds||0)-(b.elapsedSeconds||0)));
   return sorted.map(g => {
     const scorer = findPlayer(g.scorerId);
     const assists = (g.assists||[]).map(id=>playerName(findPlayer(id))).filter(Boolean).join(' · ') || 'Sans aide';
+    const remaining = goalClockRemainingSeconds(g, state.currentMatch);
+    const clockLabel = remaining == null ? '--:--' : formatClock(remaining);
+    const canEdit = state.currentMatch?.status !== 'final' || isAdmin();
     return `<div class="goal-row">
-      <div class="goal-time">P${g.period}<br>${formatClock(g.elapsedSeconds||0)}</div>
+      <div class="goal-time">P${g.period}<br>${clockLabel}</div>
       <div class="goal-main"><strong>${esc(playerName(scorer)||'Joueur archivé')}</strong><div class="goal-meta">${esc(assists)} · ${g.team==='dark'?'Foncés':'Pâles'}</div></div>
-      ${state.currentMatch?.status!=='final'?`<div><button class="btn small ghost" data-action="edit-goal" data-goal="${g.id}">Modifier</button></div>`:''}
+      ${canEdit?`<div><button class="btn small ghost" data-action="edit-goal" data-goal="${g.id}">Modifier</button></div>`:''}
     </div>`;
   }).join('');
 }
@@ -609,10 +618,10 @@ function renderStats() {
   if (!state.stats && !state.statsLoading) queueMicrotask(loadStats);
   if (state.statsLoading || !state.stats) return '<div class="card empty">Calcul des statistiques…</div>';
   const skaters = state.stats.players
-    .filter(x=>x.type!=='goalie' || x.skaterGp>0 || x.goals>0 || x.assists>0)
+    .filter(x=>x.skaterGp>0 || x.goals>0 || x.assists>0 || (x.absences>0 && x.goalieGp===0 && x.type!=='goalie'))
     .sort((a,b)=>(b.points-a.points)||(b.goals-a.goals)||a.name.localeCompare(b.name));
   const goalies = state.stats.players
-    .filter(x=>x.type==='goalie' || x.goalieGp>0)
+    .filter(x=>x.goalieGp>0 || (x.absences>0 && x.skaterGp===0 && x.type==='goalie'))
     .sort((a,b)=>(a.avg-b.avg)||a.name.localeCompare(b.name));
   return `<div class="card"><h2>Statistiques de la saison</h2><div class="kpi-grid"><div class="kpi"><strong>${state.stats.finalMatches}</strong><span>matchs</span></div><div class="kpi"><strong>${state.stats.totalGoals}</strong><span>buts</span></div><div class="kpi"><strong>${activePlayers().length}</strong><span>joueurs actifs</span></div></div><p class="muted" style="margin-top:10px">Les matchs joués sont comptés selon la position de chaque match. Un joueur qui garde les buts une soirée apparaît donc aussi dans les statistiques des gardiens.</p></div>
     <div class="card"><h3 style="margin-top:0">Joueurs</h3>${skaters.length?`<table><thead><tr><th>Joueur</th><th>MJ</th><th>B</th><th>A</th><th>PTS</th><th>ABS</th></tr></thead><tbody>${skaters.map(s=>`<tr><td>${esc(s.name)}</td><td>${s.skaterGp}</td><td>${s.goals}</td><td>${s.assists}</td><td><strong>${s.points}</strong></td><td>${s.absences}</td></tr>`).join('')}</tbody></table>`:'<div class="empty">Aucune statistique.</div>'}</div>
@@ -746,9 +755,14 @@ async function loadStats() {
     const history = [];
     let totalGoals = 0;
     for (const m of finals) {
-      const aSnap = await getDocs(collection(state.db,'leagues',state.leagueId,'matches',m.id,'assignments'));
       const gSnap = await getDocs(collection(state.db,'leagues',state.leagueId,'matches',m.id,'goals'));
-      const assignments = new Map(aSnap.docs.map(d=>[d.id,d.data()]));
+      let assignments;
+      if (Array.isArray(m.finalLineup) && m.finalLineup.length) {
+        assignments = new Map(m.finalLineup.map(a=>[a.playerId,a]));
+      } else {
+        const aSnap = await getDocs(collection(state.db,'leagues',state.leagueId,'matches',m.id,'assignments'));
+        assignments = new Map(aSnap.docs.map(d=>[d.id,d.data()]));
+      }
       const goals = gSnap.docs.map(d=>d.data());
       let dark=0, light=0;
       for (const g of goals) {
@@ -860,7 +874,7 @@ modal.addEventListener('submit', async e => {
     if(kind==='join-league') await joinLeague(fd);
     if(kind==='new-match') await createMatch(fd);
     if(kind==='player') await savePlayer(fd,form.dataset.playerId||null);
-    if(kind==='goal') await saveGoal(fd,form.dataset.goalId||null,form.dataset.team);
+    if(kind==='goal') await saveGoal(fd,form.dataset.goalId||null,form.dataset.team,Number(form.dataset.period||1));
   } catch(err){handleError(err);}
 });
 
@@ -1046,34 +1060,69 @@ async function setAssignment(playerId,team) {
 }
 
 async function setMatchPosition(playerId,position) {
-  if(!state.currentMatch || state.currentMatch.status==='final') return;
+  if(!state.currentMatch) return;
+  if(state.currentMatch.status==='final' && !isAdmin()) return;
   if(!['skater','goalie'].includes(position)) throw new Error('Position invalide.');
   const assignment=state.assignments.get(playerId);
   if(!assignment || !['dark','light'].includes(assignment.team)) throw new Error('Assigne d’abord ce joueur à une équipe.');
+
   await setDoc(doc(state.db,'leagues',state.leagueId,'matches',state.currentMatch.id,'assignments',playerId),{
     playerId,team:assignment.team,position,updatedAt:serverTimestamp(),updatedBy:state.user.uid
   },{merge:true});
+
+  if(state.currentMatch.status==='final' && isAdmin()) {
+    const finalLineup = buildFinalLineup(playerId, position);
+    await updateDoc(matchRef(),{finalLineup,updatedAt:serverTimestamp()});
+    state.currentMatch = {...state.currentMatch,finalLineup};
+    state.matches = state.matches.map(m=>m.id===state.currentMatch.id?{...m,finalLineup}:m);
+  }
+
+  state.stats=null;
   toast(position==='goalie'?'Position : gardien pour ce match.':'Position : joueur pour ce match.');
 }
 
 function openGoalEditor(team,goal=null) {
-  if(!state.currentMatch || state.currentMatch.status==='final') return;
+  if(!state.currentMatch) return;
+  if(state.currentMatch.status==='final' && !isAdmin()) return;
   const eligible=activePlayers().filter(p=>state.assignments.get(p.id)?.team===team);
   if(!eligible.length) return toast(`Ajoute d’abord des joueurs chez les ${team==='dark'?'Foncés':'Pâles'}.`);
-  const scorerId=goal?.scorerId||''; const assists=new Set(goal?.assists||[]);
-  openModal(`<h2>${goal?'Modifier':'Ajouter'} un but · ${team==='dark'?'Foncés':'Pâles'}</h2><form data-modal-form="goal" data-team="${team}" ${goal?`data-goal-id="${goal.id}"`:''}><label>Buteur</label><select name="scorer" required><option value="">Choisir…</option>${eligible.map(p=>`<option value="${p.id}" ${p.id===scorerId?'selected':''}>${esc(playerName(p))}</option>`).join('')}</select><label>Passes (maximum 2)</label><div>${eligible.map(p=>`<div class="check-row"><input type="checkbox" name="assist" value="${p.id}" ${assists.has(p.id)?'checked':''} id="a-${p.id}"><label for="a-${p.id}">${esc(playerName(p))}</label></div>`).join('')}</div><div class="modal-actions">${goal?'<button type="button" class="btn danger" data-action-modal="delete-goal">Supprimer</button>':''}<button type="button" class="btn" data-modal-close>Annuler</button><button class="btn primary grow">${goal?'Enregistrer':'Confirmer le but'}</button></div></form>`);
+
+  const scorerId=goal?.scorerId||'';
+  const assists=new Set(goal?.assists||[]);
+  const period=Number(goal?.period||state.currentMatch.period||1);
+  const capturedRemaining=goal ? goalClockRemainingSeconds(goal,state.currentMatch) : getRemainingSeconds(state.currentMatch);
+  const clockValue=capturedRemaining==null?'':formatClock(capturedRemaining);
+
+  openModal(`<h2>${goal?'Modifier':'Ajouter'} un but · ${team==='dark'?'Foncés':'Pâles'}</h2><form data-modal-form="goal" data-team="${team}" data-period="${period}" ${goal?`data-goal-id="${goal.id}"`:''}><label>Temps au chrono</label><input name="clockTime" inputmode="numeric" placeholder="MM:SS" value="${escAttr(clockValue)}" required><div class="tiny muted">${goal?'Tu peux corriger le temps manuellement.':'Le temps est capturé dès que tu appuies sur + But; le temps passé à entrer le buteur et les passes ne le décale pas.'}</div><label>Buteur</label><select name="scorer" required><option value="">Choisir…</option>${eligible.map(p=>`<option value="${p.id}" ${p.id===scorerId?'selected':''}>${esc(playerName(p))}</option>`).join('')}</select><label>Passes (maximum 2)</label><div>${eligible.map(p=>`<div class="check-row"><input type="checkbox" name="assist" value="${p.id}" ${assists.has(p.id)?'checked':''} id="a-${p.id}"><label for="a-${p.id}">${esc(playerName(p))}</label></div>`).join('')}</div><div class="modal-actions">${goal?'<button type="button" class="btn danger" data-action-modal="delete-goal">Supprimer</button>':''}<button type="button" class="btn" data-modal-close>Annuler</button><button class="btn primary grow">${goal?'Enregistrer':'Confirmer le but'}</button></div></form>`);
   modal.querySelectorAll('input[name="assist"]').forEach(cb=>cb.addEventListener('change',()=>{const checked=[...modal.querySelectorAll('input[name="assist"]:checked')];if(checked.length>2){cb.checked=false;toast('Maximum 2 passes.');}}));
-  if(goal){modal.querySelector('[data-action-modal="delete-goal"]').addEventListener('click',async()=>{if(confirm('Supprimer ce but?')){await deleteDoc(doc(state.db,'leagues',state.leagueId,'matches',state.currentMatch.id,'goals',goal.id));modal.close();toast('But supprimé.');}});}
+  if(goal){modal.querySelector('[data-action-modal="delete-goal"]').addEventListener('click',async()=>{if(confirm('Supprimer ce but?')){await deleteDoc(doc(state.db,'leagues',state.leagueId,'matches',state.currentMatch.id,'goals',goal.id));state.stats=null;modal.close();toast('But supprimé.');}});}
 }
 
-async function saveGoal(fd,id,team) {
-  const scorer=String(fd.get('scorer')||''); let assists=fd.getAll('assist').map(String).filter(x=>x&&x!==scorer).slice(0,2);
+async function saveGoal(fd,id,team,period) {
+  const scorer=String(fd.get('scorer')||'');
+  const assists=fd.getAll('assist').map(String).filter(x=>x&&x!==scorer).slice(0,2);
   if(!scorer) throw new Error('Choisis le buteur.');
-  const current=state.currentMatch; const elapsed=Math.max(0,(current.periodSeconds||1200)-getRemainingSeconds(current));
-  const data={team,scorerId:scorer,assists,period:current.period||1,elapsedSeconds:elapsed,updatedAt:serverTimestamp(),updatedBy:state.user.uid};
+
+  const current=state.currentMatch;
+  const periodSeconds=Number(current.periodSeconds||state.league.settings?.periodMinutes*60||1200);
+  const clockRemainingSeconds=parseClockInput(fd.get('clockTime'),periodSeconds);
+  const elapsedSeconds=Math.max(0,periodSeconds-clockRemainingSeconds);
+  const data={
+    team,
+    scorerId:scorer,
+    assists,
+    period:Number(period||current.period||1),
+    clockRemainingSeconds,
+    elapsedSeconds,
+    updatedAt:serverTimestamp(),
+    updatedBy:state.user.uid
+  };
+
   if(id) await setDoc(doc(state.db,'leagues',state.leagueId,'matches',current.id,'goals',id),data,{merge:true});
   else await addDoc(collection(state.db,'leagues',state.leagueId,'matches',current.id,'goals'),{...data,createdAt:serverTimestamp()});
-  modal.close(); toast(id?'But modifié.':'But ajouté.');
+  state.stats=null;
+  modal.close();
+  toast(id?'But modifié.':'But ajouté.');
 }
 
 async function toggleClock() {
@@ -1103,7 +1152,32 @@ async function nextPeriod() {
 
 async function finalizeMatch() {
   if(!confirm('Terminer ce match? Les statistiques et les absences seront alors comptées.'))return;
-  await updateDoc(matchRef(),{status:'final',finalizedAt:serverTimestamp(),'clock.running':false,'clock.remainingSeconds':getRemainingSeconds(state.currentMatch),'clock.endsAt':null}); state.stats=null; toast('Match terminé.');
+  const remaining=getRemainingSeconds(state.currentMatch);
+  const aSnap=await getDocs(collection(state.db,'leagues',state.leagueId,'matches',state.currentMatch.id,'assignments'));
+  const latestAssignments=new Map(aSnap.docs.map(d=>[d.id,{id:d.id,...d.data()}]));
+  const finalLineup=[...latestAssignments.entries()]
+    .filter(([,a])=>a.team==='dark'||a.team==='light')
+    .map(([playerId,a])=>({playerId,team:a.team,position:matchPosition(findPlayer(playerId),a)}));
+
+  await updateDoc(matchRef(),{
+    status:'final',
+    finalizedAt:serverTimestamp(),
+    finalLineup,
+    'clock.running':false,
+    'clock.remainingSeconds':remaining,
+    'clock.endsAt':null
+  });
+
+  const localFinal={
+    ...state.currentMatch,
+    status:'final',
+    finalLineup,
+    clock:{...(state.currentMatch.clock||{}),running:false,remainingSeconds:remaining,endsAt:null}
+  };
+  state.currentMatch=localFinal;
+  state.matches=state.matches.map(m=>m.id===localFinal.id?{...m,...localFinal}:m);
+  state.stats=null;
+  toast('Match terminé.');
 }
 
 async function claimAlarm() {
@@ -1256,6 +1330,31 @@ async function playAlarm(){await unlockAudio();await requestWakeLock();if(!audio
 function activePlayers(){return state.players.filter(p=>p.active!==false);}
 function defaultMatchPosition(p){return p?.type==='goalie'?'goalie':'skater';}
 function matchPosition(p,assignment){return assignment?.position==='goalie'||assignment?.position==='skater'?assignment.position:defaultMatchPosition(p);}
+function buildFinalLineup(overridePlayerId=null,overridePosition=null){
+  return [...state.assignments.entries()]
+    .filter(([,a])=>a.team==='dark'||a.team==='light')
+    .map(([playerId,a])=>({
+      playerId,
+      team:a.team,
+      position:playerId===overridePlayerId?overridePosition:matchPosition(findPlayer(playerId),a)
+    }));
+}
+function goalClockRemainingSeconds(goal,match){
+  const periodSeconds=Number(match?.periodSeconds||state.league?.settings?.periodMinutes*60||1200);
+  const explicit=Number(goal?.clockRemainingSeconds);
+  if(Number.isFinite(explicit)) return Math.max(0,Math.min(periodSeconds,explicit));
+  const elapsed=Number(goal?.elapsedSeconds);
+  if(Number.isFinite(elapsed) && elapsed>0) return Math.max(0,Math.min(periodSeconds,periodSeconds-elapsed));
+  return null;
+}
+function parseClockInput(value,maxSeconds){
+  const raw=String(value||'').trim();
+  const match=raw.match(/^(\d{1,3}):([0-5]\d)$/);
+  if(!match) throw new Error('Entre le temps au format MM:SS, par exemple 14:37.');
+  const seconds=Number(match[1])*60+Number(match[2]);
+  if(seconds<0 || seconds>maxSeconds) throw new Error(`Le temps doit être entre 00:00 et ${formatClock(maxSeconds)}.`);
+  return seconds;
+}
 function playerWasActiveAtMatch(p,m){const when=tsMillis(m.startAt),created=tsMillis(p.createdAt),archived=tsMillis(p.archivedAt);return (!created||created<=when)&&(!archived||archived>when);}
 function findPlayer(id){return state.players.find(p=>p.id===id)||null;}
 function playerName(p){return p?[p.firstName,p.lastName].filter(Boolean).join(' '):'';}

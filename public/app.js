@@ -516,7 +516,11 @@ function renderCalendarRow(m, mine) {
       <div class="calendar-date"><strong>${formatShortDate(m.startAt)}</strong><span>${formatTime(m.startAt)}${m.location?' · '+esc(m.location):''}</span></div>
       <div class="calendar-counts"><span class="pill live">${summary.yes} présent${summary.yes>1?'s':''}</span><span class="pill absent">${summary.no} absent${summary.no>1?'s':''}</span><span class="pill">${summary.maybe} incertain${summary.maybe>1?'s':''}</span><span class="pill">${summary.unknown} sans réponse</span></div>
       ${summary.yesNames.length?`<div class="calendar-names"><strong>Confirmés :</strong> ${esc(summary.yesNames.join(', '))}</div>`:''}
+      ${summary.noNames.length?`<div class="calendar-names"><strong>Absents :</strong> ${esc(summary.noNames.join(', '))}</div>`:''}
+      ${summary.maybeNames.length?`<div class="calendar-names"><strong>Incertains :</strong> ${esc(summary.maybeNames.join(', '))}</div>`:''}
       ${summary.subYesNames.length?`<div class="calendar-names"><strong>Remplaçants dispo :</strong> ${esc(summary.subYesNames.join(', '))}</div>`:''}
+      ${summary.subNoNames.length?`<div class="calendar-names"><strong>Remplaçants indispo :</strong> ${esc(summary.subNoNames.join(', '))}</div>`:''}
+      ${summary.subMaybeNames.length?`<div class="calendar-names"><strong>Remplaçants incertains :</strong> ${esc(summary.subMaybeNames.join(', '))}</div>`:''}
     </button>
     ${mine?`<div class="calendar-my"><div class="tiny">Moi : <strong>${esc(mineLabel)}</strong></div>${renderCalendarResponseButtons(m,mine,mineStatus)}</div>`:''}
     ${isAdmin() && m.status==='scheduled'?`<div class="calendar-admin-actions"><button class="btn small danger" data-action="delete-calendar-match" data-match="${m.id}">Supprimer ce match</button></div>`:''}
@@ -572,13 +576,23 @@ function attendanceSummary(match) {
   const subs = activePlayers().filter(p=>p.type==='sub');
   const status = p => getMatchResponseStatus(match,p.id);
   const yesPlayers = core.filter(p=>status(p)==='yes');
+  const noPlayers = core.filter(p=>status(p)==='no');
+  const maybePlayers = core.filter(p=>status(p)==='maybe');
+  const unknownPlayers = core.filter(p=>status(p)==='unknown');
+  const subYesPlayers = subs.filter(p=>status(p)==='yes');
+  const subNoPlayers = subs.filter(p=>status(p)==='no');
+  const subMaybePlayers = subs.filter(p=>status(p)==='maybe');
   return {
     yes: yesPlayers.length,
-    no: core.filter(p=>status(p)==='no').length,
-    maybe: core.filter(p=>status(p)==='maybe').length,
-    unknown: core.filter(p=>status(p)==='unknown').length,
+    no: noPlayers.length,
+    maybe: maybePlayers.length,
+    unknown: unknownPlayers.length,
     yesNames: yesPlayers.map(playerName),
-    subYesNames: subs.filter(p=>status(p)==='yes').map(playerName)
+    noNames: noPlayers.map(playerName),
+    maybeNames: maybePlayers.map(playerName),
+    subYesNames: subYesPlayers.map(playerName),
+    subNoNames: subNoPlayers.map(playerName),
+    subMaybeNames: subMaybePlayers.map(playerName)
   };
 }
 

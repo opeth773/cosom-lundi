@@ -1286,3 +1286,49 @@ th {
   }
 
 }
+
+/* Stats history: completed matches open their full match details. */
+.history-match-row {
+  width: 100%;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 10px;
+  align-items: center;
+  padding: 11px 0;
+  border: 0;
+  border-bottom: 1px solid var(--line);
+  background: transparent;
+  color: var(--ink);
+  text-align: left;
+}
+
+.history-match-row:last-child {
+  border-bottom: 0;
+}
+
+.history-match-row:focus-visible {
+  outline: 3px solid rgba(20, 77, 54, .18);
+  outline-offset: 3px;
+  border-radius: 10px;
+}
+
+.history-match-link {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 24px;
+  line-height: 1;
+  color: var(--sub);
+}
+
+@media (hover: hover) and (pointer: fine) {
+  .history-match-row:hover {
+    background: var(--soft);
+    margin-left: -8px;
+    margin-right: -8px;
+    width: calc(100% + 16px);
+    padding-left: 8px;
+    padding-right: 8px;
+    border-radius: 10px;
+  }
+}

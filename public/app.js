@@ -665,7 +665,7 @@ function renderStats() {
   return `<div class="card"><h2>Statistiques de la saison</h2><div class="kpi-grid"><div class="kpi"><strong>${state.stats.finalMatches}</strong><span>matchs</span></div><div class="kpi"><strong>${state.stats.totalGoals}</strong><span>buts</span></div><div class="kpi"><strong>${activePlayers().length}</strong><span>joueurs actifs</span></div></div><p class="muted" style="margin-top:10px">Les matchs joués sont comptés selon la position de chaque match. Un joueur qui garde les buts une soirée apparaît donc aussi dans les statistiques des gardiens.</p></div>
     <div class="card"><h3 style="margin-top:0">Joueurs</h3>${skaters.length?`<table><thead><tr><th>Joueur</th><th>MJ</th><th>B</th><th>A</th><th>PTS</th><th>ABS</th></tr></thead><tbody>${skaters.map(s=>`<tr><td>${esc(s.name)}</td><td>${s.skaterGp}</td><td>${s.goals}</td><td>${s.assists}</td><td><strong>${s.points}</strong></td><td>${s.absences}</td></tr>`).join('')}</tbody></table>`:'<div class="empty">Aucune statistique.</div>'}</div>
     <div class="card"><h3 style="margin-top:0">Gardiens</h3>${goalies.length?`<table><thead><tr><th>Gardien</th><th>MJ</th><th>BA</th><th>MOY</th><th>ABS</th></tr></thead><tbody>${goalies.map(s=>`<tr><td>${esc(s.name)}</td><td>${s.goalieGp}</td><td>${s.ga}</td><td><strong>${s.avg.toFixed(2).replace('.',',')}</strong></td><td>${s.absences}</td></tr>`).join('')}</tbody></table>`:'<div class="empty">Aucun gardien.</div>'}</div>
-    <div class="card"><h3 style="margin-top:0">Historique</h3>${state.stats.history.length?state.stats.history.map(h=>`<div class="list-row"><div><div class="person-name">${formatDate(h.startAt)}</div><div class="person-meta">Foncés ${h.dark} − ${h.light} Pâles</div></div><span class="pill">Final</span></div>`).join(''):'<div class="empty">Aucun match terminé.</div>'}</div>`;
+    <div class="card"><h3 style="margin-top:0">Historique</h3>${state.stats.history.length?state.stats.history.map(h=>`<button type="button" class="history-match-row" data-action="open-history-match" data-match="${h.id}" aria-label="Voir les détails du match du ${escAttr(formatDate(h.startAt))}"><div><div class="person-name">${formatDate(h.startAt)}</div><div class="person-meta">Foncés ${h.dark} − ${h.light} Pâles</div></div><div class="history-match-link"><span class="pill">Final</span><span aria-hidden="true">›</span></div></button>`).join(''):'<div class="empty">Aucun match terminé.</div>'}</div>`;
 }
 
 function renderSettings() {
@@ -826,7 +826,7 @@ async function loadStats() {
           s.absences++;
         }
       }
-      history.push({startAt:m.startAt,dark,light});
+      history.push({id:m.id,startAt:m.startAt,dark,light});
     }
     for (const s of playerMap.values()) { s.points=s.goals+s.assists; s.avg=s.goalieGp?s.ga/s.goalieGp:0; }
     state.stats = {finalMatches:finals.length,totalGoals,players:[...playerMap.values()],history:history.sort((a,b)=>tsMillis(b.startAt)-tsMillis(a.startAt))};
@@ -870,6 +870,7 @@ root.addEventListener('click', async e => {
     else if (action==='respond-match') await setResponseForMatch(el.dataset.match,el.dataset.player,el.dataset.status);
     else if (action==='calendar-attendance') openCalendarAttendance(el.dataset.match,el.dataset.status);
     else if (action==='calendar-match') { selectMatch(el.dataset.match); state.tab='calendar'; render(); }
+    else if (action==='open-history-match') { selectMatch(el.dataset.match); state.tab='match'; render(); }
     else if (action==='open-match-tab') { state.tab='match'; render(); }
     else if (action==='copy-invite') await copyInvite();
     else if (action==='export-json') await exportLeagueJson();

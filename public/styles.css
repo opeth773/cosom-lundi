@@ -3479,10 +3479,10 @@ tbody td:first-child {
   }
 }
 
-/* v8.3 — substitute roles in player directory */
+/* v8.4 — exclusive substitute role views */
 .sub-role-filter {
   display: grid;
-  grid-template-columns: 1fr 1fr;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
   gap: 6px;
   margin: 2px 0 10px;
   padding: 5px;
@@ -3509,22 +3509,6 @@ tbody td:first-child {
   box-shadow: 0 2px 7px rgba(53, 106, 230, .09);
 }
 
-.sub-both-badge {
-  display: inline-flex;
-  align-items: center;
-  min-height: 19px;
-  margin-left: 6px;
-  padding: 2px 6px;
-  border: 1px solid var(--brand-line, #cddcff);
-  border-radius: 999px;
-  background: var(--brand-soft, #eef4ff);
-  color: var(--brand);
-  font-size: 8.5px;
-  font-weight: 900;
-  line-height: 1;
-  letter-spacing: .35px;
-  vertical-align: middle;
-}
 
 .sub-role-help {
   margin: 7px 2px 2px;
@@ -3541,10 +3525,5 @@ tbody td:first-child {
     font-size: 11.5px;
   }
 
-  .sub-both-badge {
-    display: flex;
-    width: fit-content;
-    margin: 5px 0 0;
-  }
 }
 

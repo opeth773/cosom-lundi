@@ -789,10 +789,11 @@ function renderPlayers() {
   let players = activePlayers().filter(p=>p.type===state.playerTab);
   let subFilter = '';
   if (state.playerTab === 'sub') {
-    players = players.filter(p=>substituteCanPlay(p,state.subPlayerTab));
+    players = players.filter(p=>substituteRole(p)===state.subPlayerTab);
     subFilter = `<div class="sub-role-filter" role="tablist" aria-label="Type de remplaçant">
       <button type="button" role="tab" aria-selected="${state.subPlayerTab==='skater'}" data-sub-player-tab="skater" class="${state.subPlayerTab==='skater'?'active':''}">Joueurs</button>
       <button type="button" role="tab" aria-selected="${state.subPlayerTab==='goalie'}" data-sub-player-tab="goalie" class="${state.subPlayerTab==='goalie'?'active':''}">Gardiens</button>
+      <button type="button" role="tab" aria-selected="${state.subPlayerTab==='both'}" data-sub-player-tab="both" class="${state.subPlayerTab==='both'?'active':''}">Les deux</button>
     </div>`;
   }
 
@@ -805,10 +806,9 @@ function renderPlayers() {
       <div class="segment" style="margin-top:12px">${Object.entries(types).map(([k,v])=>`<button data-player-tab="${k}" class="${state.playerTab===k?'active':''}">${v}</button>`).join('')}</div>
       ${subFilter}
       ${players.length?players.map(p=>{
-        const meta = p.type==='goalie' ? 'Gardien' : p.type==='sub' ? `Remplaçant · ${substituteRoleLabel(p)}` : 'Régulier';
-        const bothBadge = p.type==='sub' && substituteRole(p)==='both' ? '<span class="sub-both-badge">JOUEUR + GARDIEN</span>' : '';
-        return `<div class="list-row player-directory-row"><div><div class="person-name">${playerName(p)}</div><div class="person-meta">${esc(meta)} ${bothBadge}</div></div>${isAdmin()?`<button class="btn small ghost" data-action="edit-player" data-player="${p.id}">Modifier</button>`:''}</div>`;
-      }).join(''):`<div class="empty">Aucun ${state.playerTab==='sub'?(state.subPlayerTab==='goalie'?'gardien remplaçant':'joueur remplaçant'):'joueur dans cette catégorie'}.</div>`}
+        const meta = p.type==='goalie' ? 'Gardien' : p.type==='sub' ? 'Remplaçant' : 'Régulier';
+        return `<div class="list-row player-directory-row"><div><div class="person-name">${playerName(p)}</div><div class="person-meta">${esc(meta)}</div></div>${isAdmin()?`<button class="btn small ghost" data-action="edit-player" data-player="${p.id}">Modifier</button>`:''}</div>`;
+      }).join(''):`<div class="empty">Aucun ${state.playerTab==='sub'?(state.subPlayerTab==='goalie'?'gardien remplaçant':state.subPlayerTab==='both'?'remplaçant polyvalent':'joueur remplaçant'):'joueur dans cette catégorie'}.</div>`}
     </div>`;
 }
 
@@ -1000,7 +1000,7 @@ root.addEventListener('click', async e => {
   const playerTab = e.target.closest('[data-player-tab]')?.dataset.playerTab;
   if (playerTab) { state.playerTab=playerTab; render(); return; }
   const subPlayerTab = e.target.closest('[data-sub-player-tab]')?.dataset.subPlayerTab;
-  if (subPlayerTab) { state.subPlayerTab=subPlayerTab==='goalie'?'goalie':'skater'; render(); return; }
+  if (subPlayerTab) { state.subPlayerTab=['skater','goalie','both'].includes(subPlayerTab)?subPlayerTab:'skater'; render(); return; }
   const authMode = e.target.closest('[data-auth-mode]')?.dataset.authMode;
   if (authMode) { state.authMode=authMode; renderAuth(); return; }
   const el = e.target.closest('[data-action]');
@@ -1279,7 +1279,7 @@ async function savePlayer(fd,id) {
   if(id) await setDoc(doc(state.db,'leagues',state.leagueId,'players',id),data,{merge:true});
   else await addDoc(collection(state.db,'leagues',state.leagueId,'players'),{...data,createdAt:serverTimestamp()});
   state.playerTab=data.type;
-  if(data.type==='sub') state.subPlayerTab=data.subRole==='goalie'?'goalie':'skater';
+  if(data.type==='sub') state.subPlayerTab=['skater','goalie','both'].includes(data.subRole)?data.subRole:'skater';
   modal.close(); state.tab='players'; toast('Joueur enregistré.');
 }
 

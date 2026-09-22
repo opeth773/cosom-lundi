@@ -864,6 +864,47 @@ th {
   white-space: nowrap
 }
 
+.calendar-date-button {
+  width: 100%;
+  border: 0;
+  background: transparent;
+  color: var(--ink);
+  text-align: left;
+  padding: 0;
+  cursor: pointer
+}
+
+.calendar-date-button:focus-visible,
+.attendance-pill:focus-visible {
+  outline: 2px solid var(--brand);
+  outline-offset: 2px
+}
+
+.attendance-pill {
+  appearance: none;
+  border: 0;
+  cursor: pointer;
+  min-height: 28px
+}
+
+@media (hover:hover) and (pointer:fine) {
+  .attendance-pill:hover {
+    filter: brightness(.96);
+    text-decoration: underline
+  }
+}
+
+.attendance-name-list {
+  margin-top: 14px;
+  border-top: 1px solid var(--line)
+}
+
+.attendance-name-row {
+  padding: 11px 2px;
+  border-bottom: 1px solid var(--line);
+  font-weight: 700
+}
+
 .calendar-counts {
   display: flex;
   gap: 5px;

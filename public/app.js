@@ -9,7 +9,7 @@ import {
   writeBatch, serverTimestamp, Timestamp, onSnapshot, query, orderBy, where, runTransaction, arrayUnion, arrayRemove
 } from 'https://www.gstatic.com/firebasejs/12.19.0/firebase-firestore.js';
 
-const APP_VERSION = '7.6.0';
+const APP_VERSION = '7.8.0';
 const root = document.getElementById('app');
 const modal = document.getElementById('modal');
 const toastEl = document.getElementById('toast');
@@ -512,19 +512,43 @@ function renderCalendarRow(m, mine) {
     ? ({yes:'Disponible',no:'Indispo',maybe:'Incertain',unknown:'Non répondu'}[mineStatus])
     : ({yes:'Présent',no:'Absent',maybe:'Incertain',unknown:'Non répondu'}[mineStatus]);
   return `<div class="calendar-row ${m.id===state.selectedMatchId?'selected-match':''}">
-    <button class="calendar-main" data-action="calendar-match" data-match="${m.id}">
-      <div class="calendar-date"><strong>${formatShortDate(m.startAt)}</strong><span>${formatTime(m.startAt)}${m.location?' · '+esc(m.location):''}</span></div>
-      <div class="calendar-counts"><span class="pill live">${summary.yes} présent${summary.yes>1?'s':''}</span><span class="pill absent">${summary.no} absent${summary.no>1?'s':''}</span><span class="pill">${summary.maybe} incertain${summary.maybe>1?'s':''}</span><span class="pill">${summary.unknown} sans réponse</span></div>
+    <div class="calendar-main">
+      <button type="button" class="calendar-date calendar-date-button" data-action="calendar-match" data-match="${m.id}">
+        <strong>${formatShortDate(m.startAt)}</strong><span>${formatTime(m.startAt)}${m.location?' · '+esc(m.location):''}</span>
+      </button>
+      <div class="calendar-counts" aria-label="Réponses de présence">
+        <button type="button" class="pill live attendance-pill" data-action="calendar-attendance" data-match="${m.id}" data-status="yes" title="Voir les présents">${summary.yes} présent${summary.yes>1?'s':''}</button>
+        <button type="button" class="pill absent attendance-pill" data-action="calendar-attendance" data-match="${m.id}" data-status="no" title="Voir les absents">${summary.no} absent${summary.no>1?'s':''}</button>
+        <button type="button" class="pill attendance-pill" data-action="calendar-attendance" data-match="${m.id}" data-status="maybe" title="Voir les incertains">${summary.maybe} incertain${summary.maybe>1?'s':''}</button>
+        <button type="button" class="pill attendance-pill" data-action="calendar-attendance" data-match="${m.id}" data-status="unknown" title="Voir ceux qui n'ont pas répondu">${summary.unknown} sans réponse</button>
+      </div>
       ${summary.yesNames.length?`<div class="calendar-names"><strong>Confirmés :</strong> ${esc(summary.yesNames.join(', '))}</div>`:''}
       ${summary.noNames.length?`<div class="calendar-names"><strong>Absents :</strong> ${esc(summary.noNames.join(', '))}</div>`:''}
       ${summary.maybeNames.length?`<div class="calendar-names"><strong>Incertains :</strong> ${esc(summary.maybeNames.join(', '))}</div>`:''}
       ${summary.subYesNames.length?`<div class="calendar-names"><strong>Remplaçants dispo :</strong> ${esc(summary.subYesNames.join(', '))}</div>`:''}
       ${summary.subNoNames.length?`<div class="calendar-names"><strong>Remplaçants indispo :</strong> ${esc(summary.subNoNames.join(', '))}</div>`:''}
       ${summary.subMaybeNames.length?`<div class="calendar-names"><strong>Remplaçants incertains :</strong> ${esc(summary.subMaybeNames.join(', '))}</div>`:''}
-    </button>
+    </div>
     ${mine?`<div class="calendar-my"><div class="tiny">Moi : <strong>${esc(mineLabel)}</strong></div>${renderCalendarResponseButtons(m,mine,mineStatus)}</div>`:''}
     ${isAdmin() && m.status==='scheduled'?`<div class="calendar-admin-actions"><button class="btn small danger" data-action="delete-calendar-match" data-match="${m.id}">Supprimer ce match</button></div>`:''}
   </div>`;
+}
+
+function openCalendarAttendance(matchId, status) {
+  const match = state.matches.find(m => m.id === matchId);
+  if (!match) return;
+  const summary = attendanceSummary(match);
+  const groups = {
+    yes: {title:'Présents', names:summary.yesNames},
+    no: {title:'Absents', names:summary.noNames},
+    maybe: {title:'Incertains', names:summary.maybeNames},
+    unknown: {title:'Sans réponse', names:summary.unknownNames}
+  };
+  const group = groups[status] || groups.unknown;
+  const list = group.names.length
+    ? `<div class="attendance-name-list">${group.names.map(name=>`<div class="attendance-name-row">${esc(name)}</div>`).join('')}</div>`
+    : '<div class="empty">Personne dans cette catégorie.</div>';
+  openModal(`<h2>${esc(group.title)}</h2><div class="muted">${formatDate(match.startAt)} · ${formatTime(match.startAt)}</div>${list}<div class="modal-actions"><button type="button" class="btn primary wide" data-modal-close>Fermer</button></div>`);
 }
 
 function renderCalendarResponseButtons(match, player, status) {
@@ -590,6 +614,7 @@ function attendanceSummary(match) {
     yesNames: yesPlayers.map(playerName),
     noNames: noPlayers.map(playerName),
     maybeNames: maybePlayers.map(playerName),
+    unknownNames: unknownPlayers.map(playerName),
     subYesNames: subYesPlayers.map(playerName),
     subNoNames: subNoPlayers.map(playerName),
     subMaybeNames: subMaybePlayers.map(playerName)
@@ -843,6 +868,7 @@ root.addEventListener('click', async e => {
     else if (action==='clear-teams') await clearTeams();
     else if (action==='respond') await setResponse(el.dataset.player,el.dataset.status);
     else if (action==='respond-match') await setResponseForMatch(el.dataset.match,el.dataset.player,el.dataset.status);
+    else if (action==='calendar-attendance') openCalendarAttendance(el.dataset.match,el.dataset.status);
     else if (action==='calendar-match') { selectMatch(el.dataset.match); state.tab='calendar'; render(); }
     else if (action==='open-match-tab') { state.tab='match'; render(); }
     else if (action==='copy-invite') await copyInvite();

@@ -3197,3 +3197,285 @@ tbody tr:last-child td {
   }
 }
 
+/* =========================================================
+   v8.2 — Readability & spacing polish
+   Keeps the v8.1 visual identity while making section
+   hierarchy, lists, tables and separators easier to scan.
+   ========================================================= */
+
+:root {
+  --section-blue: #315db8;
+  --section-blue-soft: #eef3ff;
+  --section-blue-line: #d8e3fb;
+  --row-line: #e4e9f1;
+}
+
+/* Clear distinction between a card title and its content. */
+.card-heading {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  margin: 0 0 14px;
+  padding: 0 0 11px;
+  border-bottom: 1px solid var(--line);
+  color: var(--ink-strong);
+  font-size: 16px;
+  font-weight: 860;
+  line-height: 1.2;
+  letter-spacing: -.28px;
+}
+
+.card-heading::before {
+  content: "";
+  width: 4px;
+  height: 17px;
+  flex: 0 0 4px;
+  border-radius: 999px;
+  background: var(--brand);
+}
+
+.card-heading.compact {
+  margin: 0;
+  padding: 0;
+  border-bottom: 0;
+}
+
+/* Category headers should never look like player names. */
+.group-heading {
+  margin: 21px 0 8px;
+  padding: 8px 10px;
+  border: 1px solid var(--section-blue-line);
+  border-radius: 10px;
+  background: linear-gradient(180deg, #f5f8ff, var(--section-blue-soft));
+  color: var(--section-blue);
+  font-size: 10.5px;
+  font-weight: 900;
+  line-height: 1.2;
+  letter-spacing: .72px;
+  text-transform: uppercase;
+}
+
+.group-heading:first-child {
+  margin-top: 12px;
+}
+
+/* Give every person / item enough air above and below the divider. */
+.assignment-row,
+.list-row {
+  min-height: 58px;
+  padding: 14px 8px;
+  border-bottom: 1px solid var(--row-line);
+}
+
+.assignment-row:last-child,
+.list-row:last-child {
+  border-bottom: 0;
+}
+
+.person-name {
+  color: var(--ink-strong);
+  font-size: 13.5px;
+  font-weight: 800;
+  line-height: 1.32;
+}
+
+.person-meta {
+  margin-top: 4px;
+  font-size: 10.75px;
+  line-height: 1.4;
+}
+
+/* The controls on lineup rows need their own breathing room. */
+.assignment-person {
+  padding-top: 5px;
+}
+
+.assignment-actions {
+  gap: 12px;
+}
+
+.match-position-control {
+  gap: 6px;
+}
+
+.match-position-label {
+  margin-bottom: 1px;
+}
+
+/* Attendance / admin lists had dividers sitting too close to content. */
+.member-admin-row {
+  padding: 16px 7px;
+  border-bottom: 1px solid var(--row-line);
+}
+
+.member-admin-head {
+  gap: 10px;
+}
+
+.member-admin-controls {
+  margin-top: 11px;
+}
+
+.attendance-name-row {
+  min-height: 46px;
+  padding: 13px 7px;
+  border-bottom: 1px solid var(--row-line);
+}
+
+.attendance-name-row:last-child {
+  border-bottom: 0;
+}
+
+/* Stats tables: stronger header row, more vertical spacing, clearer names. */
+table {
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  overflow: hidden;
+  background: var(--surface);
+}
+
+thead th {
+  padding: 10px 8px;
+  border-bottom: 1px solid var(--line-strong);
+  background: var(--surface-subtle);
+  color: #66758b;
+}
+
+tbody td {
+  padding: 12px 8px;
+}
+
+tbody td:first-child {
+  color: var(--ink-strong);
+  font-weight: 720;
+}
+
+/* Goals / history: separators get the same comfortable rhythm. */
+.goal-row {
+  min-height: 64px;
+  padding: 14px 8px;
+  border-bottom-color: var(--row-line);
+}
+
+.history-match-row {
+  min-height: 62px;
+  padding: 14px 10px;
+  border-bottom-color: var(--row-line);
+}
+
+/* Calendar month title is a section header, not another player/item label. */
+.calendar-month > h3 {
+  margin: -2px -2px 10px;
+  padding: 0 2px 10px;
+  border-bottom: 1px solid var(--line);
+  color: var(--ink-strong);
+  font-size: 15px;
+  font-weight: 860;
+  letter-spacing: -.25px;
+  text-transform: capitalize;
+}
+
+.calendar-row {
+  padding-top: 14px;
+  padding-bottom: 14px;
+}
+
+.calendar-names {
+  margin-top: 8px;
+  line-height: 1.58;
+}
+
+.calendar-my {
+  margin-top: 13px;
+  padding-top: 13px;
+}
+
+/* Archived match lineups: role headers and players need more visual separation. */
+.archive-lineup-role {
+  padding-top: 16px;
+  padding-bottom: 7px;
+  color: var(--section-blue);
+  font-weight: 900;
+}
+
+.archive-lineup-player {
+  min-height: 44px;
+  padding-top: 10px;
+  padding-bottom: 10px;
+  border-bottom: 1px solid var(--row-line);
+}
+
+.archive-lineup-player:last-child {
+  border-bottom: 0;
+}
+
+.archive-period-title {
+  margin-top: 2px;
+  padding-bottom: 10px;
+}
+
+.archive-period-title h3 {
+  color: var(--ink-strong);
+}
+
+.archive-goal-row {
+  padding-top: 14px;
+  padding-bottom: 14px;
+}
+
+@media (hover: hover) and (pointer: fine) {
+  .list-row:hover,
+  .assignment-row:hover,
+  .member-admin-row:hover {
+    background: var(--surface-subtle);
+    border-radius: 10px;
+  }
+}
+
+@media (max-width: 600px) {
+  .card-heading {
+    margin-bottom: 12px;
+    padding-bottom: 10px;
+    font-size: 15px;
+  }
+
+  .group-heading {
+    margin-top: 18px;
+    padding: 8px 9px;
+  }
+
+  .assignment-row,
+  .list-row {
+    padding: 13px 6px;
+  }
+
+  .member-admin-row {
+    padding: 14px 5px;
+  }
+
+  th,
+  td,
+  thead th,
+  tbody td {
+    padding-left: 6px;
+    padding-right: 6px;
+  }
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --section-blue: #a8beff;
+    --section-blue-soft: #172747;
+    --section-blue-line: #2d4779;
+    --row-line: #2a374b;
+  }
+
+  .group-heading {
+    background: linear-gradient(180deg, #1b2a49, var(--section-blue-soft));
+  }
+
+  thead th {
+    color: #a7b4c8;
+  }
+}
+

@@ -9,7 +9,7 @@ import {
   writeBatch, serverTimestamp, Timestamp, onSnapshot, query, orderBy, where, runTransaction, arrayUnion, arrayRemove
 } from 'https://www.gstatic.com/firebasejs/12.19.0/firebase-firestore.js';
 
-const APP_VERSION = '8.1.0';
+const APP_VERSION = '8.2.0';
 const root = document.getElementById('app');
 const modal = document.getElementById('modal');
 const toastEl = document.getElementById('toast');
@@ -427,18 +427,18 @@ function renderMatch() {
       <button class="btn goalbtn" data-action="new-goal" data-team="light"><strong>+ But Pâles</strong></button>
     </div>
     <div class="card">
-      <div class="row between"><h3 style="margin:0">Alignements</h3>${canClear?'<button class="btn small ghost" data-action="clear-teams">Vider les équipes</button>':''}</div>
+      <div class="row between"><h3 class="card-heading compact">Alignements</h3>${canClear?'<button class="btn small ghost" data-action="clear-teams">Vider les équipes</button>':''}</div>
       ${renderAssignmentGroup('Joueurs réguliers','regular')}
       ${renderAssignmentGroup('Gardiens','goalie')}
       ${renderAssignmentGroup('Remplaçants','sub')}
     </div>
     <div class="card">
-      <h3 style="margin-top:0">Résultat par période</h3>
+      <h3 class="card-heading">Résultat par période</h3>
       <table><thead><tr><th>Équipe</th>${periodRows.map(x=>`<th>P${x.p}</th>`).join('')}<th>TOT</th></tr></thead>
       <tbody><tr><td>Foncés</td>${periodRows.map(x=>`<td>${x.d}</td>`).join('')}<td><strong>${score.dark}</strong></td></tr>
       <tr><td>Pâles</td>${periodRows.map(x=>`<td>${x.l}</td>`).join('')}<td><strong>${score.light}</strong></td></tr></tbody></table>
     </div>
-    <div class="card"><h3 style="margin-top:0">Buts</h3>${renderGoals()}</div>
+    <div class="card"><h3 class="card-heading">Buts</h3>${renderGoals()}</div>
   `;
 }
 
@@ -572,7 +572,7 @@ function renderMatchSelector() {
 function renderAssignmentGroup(title, type) {
   const players = activePlayers().filter(p => p.type === type);
   if (!players.length) return '';
-  return `<h3>${title}</h3>${players.map(p => {
+  return `<h3 class="group-heading">${title}</h3>${players.map(p => {
     const assignment = state.assignments.get(p.id);
     const team = assignment?.team || 'absent';
     const position = matchPosition(p, assignment);
@@ -711,7 +711,7 @@ function renderSelectedAttendanceDetails() {
 function renderResponseGroup(title,type) {
   const players = activePlayers().filter(p=>p.type===type);
   if (!players.length) return '';
-  return `<h3>${title}</h3>${players.map(p=>{
+  return `<h3 class="group-heading">${title}</h3>${players.map(p=>{
     const r = state.responses.get(p.id)?.status || getMatchResponseStatus(state.currentMatch,p.id);
     const labels = type==='sub' ? {yes:'Disponible',no:'Indispo',maybe:'Incertain',unknown:'Non répondu'} : {yes:'Présent',no:'Absent',maybe:'Incertain',unknown:'Non répondu'};
     return `<div class="list-row"><div><div class="person-name">${playerName(p)}</div><div class="person-meta">${labels[r]}</div></div>${isAdmin()?renderResponseButtons(p,false):statusPill(r,labels[r])}</div>`;
@@ -801,9 +801,9 @@ function renderStats() {
     .filter(x=>x.goalieGp>0 || (x.absences>0 && x.skaterGp===0 && x.type==='goalie'))
     .sort((a,b)=>(a.avg-b.avg)||a.name.localeCompare(b.name));
   return `<div class="card"><h2>Statistiques de la saison</h2><div class="kpi-grid"><div class="kpi"><strong>${state.stats.finalMatches}</strong><span>matchs</span></div><div class="kpi"><strong>${state.stats.totalGoals}</strong><span>buts</span></div><div class="kpi"><strong>${activePlayers().length}</strong><span>joueurs actifs</span></div></div><p class="muted" style="margin-top:10px">Les matchs joués sont comptés selon la position de chaque match. Un joueur qui garde les buts une soirée apparaît donc aussi dans les statistiques des gardiens.</p></div>
-    <div class="card"><h3 style="margin-top:0">Joueurs</h3>${skaters.length?`<table><thead><tr><th>Joueur</th><th>MJ</th><th>B</th><th>A</th><th>PTS</th><th>ABS</th></tr></thead><tbody>${skaters.map(s=>`<tr><td>${esc(s.name)}</td><td>${s.skaterGp}</td><td>${s.goals}</td><td>${s.assists}</td><td><strong>${s.points}</strong></td><td>${s.absences}</td></tr>`).join('')}</tbody></table>`:'<div class="empty">Aucune statistique.</div>'}</div>
-    <div class="card"><h3 style="margin-top:0">Gardiens</h3>${goalies.length?`<table><thead><tr><th>Gardien</th><th>MJ</th><th>BA</th><th>MOY</th><th>ABS</th></tr></thead><tbody>${goalies.map(s=>`<tr><td>${esc(s.name)}</td><td>${s.goalieGp}</td><td>${s.ga}</td><td><strong>${s.avg.toFixed(2).replace('.',',')}</strong></td><td>${s.absences}</td></tr>`).join('')}</tbody></table>`:'<div class="empty">Aucun gardien.</div>'}</div>
-    <div class="card"><h3 style="margin-top:0">Historique</h3>${state.stats.history.length?state.stats.history.map(h=>`<button type="button" class="history-match-row" data-action="open-history-match" data-match="${h.id}" aria-label="Voir les détails du match du ${escAttr(formatDate(h.startAt))}"><div><div class="person-name">${formatDate(h.startAt)}</div><div class="person-meta">Foncés ${h.dark} − ${h.light} Pâles</div></div><div class="history-match-link"><span class="pill">Final</span><span aria-hidden="true">›</span></div></button>`).join(''):'<div class="empty">Aucun match terminé.</div>'}</div>`;
+    <div class="card"><h3 class="card-heading">Joueurs</h3>${skaters.length?`<table><thead><tr><th>Joueur</th><th>MJ</th><th>B</th><th>A</th><th>PTS</th><th>ABS</th></tr></thead><tbody>${skaters.map(s=>`<tr><td>${esc(s.name)}</td><td>${s.skaterGp}</td><td>${s.goals}</td><td>${s.assists}</td><td><strong>${s.points}</strong></td><td>${s.absences}</td></tr>`).join('')}</tbody></table>`:'<div class="empty">Aucune statistique.</div>'}</div>
+    <div class="card"><h3 class="card-heading">Gardiens</h3>${goalies.length?`<table><thead><tr><th>Gardien</th><th>MJ</th><th>BA</th><th>MOY</th><th>ABS</th></tr></thead><tbody>${goalies.map(s=>`<tr><td>${esc(s.name)}</td><td>${s.goalieGp}</td><td>${s.ga}</td><td><strong>${s.avg.toFixed(2).replace('.',',')}</strong></td><td>${s.absences}</td></tr>`).join('')}</tbody></table>`:'<div class="empty">Aucun gardien.</div>'}</div>
+    <div class="card"><h3 class="card-heading">Historique</h3>${state.stats.history.length?state.stats.history.map(h=>`<button type="button" class="history-match-row" data-action="open-history-match" data-match="${h.id}" aria-label="Voir les détails du match du ${escAttr(formatDate(h.startAt))}"><div><div class="person-name">${formatDate(h.startAt)}</div><div class="person-meta">Foncés ${h.dark} − ${h.light} Pâles</div></div><div class="history-match-link"><span class="pill">Final</span><span aria-hidden="true">›</span></div></button>`).join(''):'<div class="empty">Aucun match terminé.</div>'}</div>`;
 }
 
 function renderSettings() {
@@ -822,7 +822,7 @@ function renderSettings() {
     .filter(u=>!memberIds.has(u.id))
     .sort((a,b)=>String(a.displayName||a.email||'').localeCompare(String(b.displayName||b.email||''),'fr')) : [];
   return `${admin?`<div class="card admin-card"><div class="row between"><div><h2 style="margin:0">Mode administrateur</h2><div class="muted">Gestion de la ligue et des comptes</div></div><span class="role-badge admin">ADMIN</span></div></div>
-    <div class="card"><h3 style="margin-top:0">Demandes d’accès</h3><p class="muted">Tout nouveau compte apparaît ici automatiquement. Choisis le joueur correspondant puis approuve-le. Il n’a pas besoin de se réinscrire.</p>
+    <div class="card"><h3 class="card-heading">Demandes d’accès</h3><p class="muted">Tout nouveau compte apparaît ici automatiquement. Choisis le joueur correspondant puis approuve-le. Il n’a pas besoin de se réinscrire.</p>
       ${pendingUsers.length?pendingUsers.map(u=>{
         const req=state.accessRequests.get(u.id);
         const rejected=req?.status==='rejected';
@@ -832,7 +832,7 @@ function renderSettings() {
         </div>`;
       }).join(''):'<div class="empty">Aucun compte en attente.</div>'}
     </div>
-    <div class="card"><h3 style="margin-top:0">Comptes et rôles</h3><p class="muted">Tu associes ici chaque compte approuvé à son joueur. Les comptes normaux ne peuvent pas modifier eux-mêmes cette association.</p>
+    <div class="card"><h3 class="card-heading">Comptes et rôles</h3><p class="muted">Tu associes ici chaque compte approuvé à son joueur. Les comptes normaux ne peuvent pas modifier eux-mêmes cette association.</p>
       ${members.length?members.map(m=>{
         const owner=m.id===state.league.ownerUid;
         const me=m.id===state.user.uid;
@@ -841,9 +841,9 @@ function renderSettings() {
           ${!owner && !me ? `<button class="btn small ${m.role==='admin'?'warn':'primary'}" data-action="set-member-role" data-member="${m.id}" data-role="${m.role==='admin'?'member':'admin'}">${m.role==='admin'?'Remettre normal':'Nommer admin'}</button>`:''}</div></div>`;
       }).join(''):'<div class="empty">Aucun compte.</div>'}
     </div>
-    <div class="card"><h3 style="margin-top:0">Configuration des matchs</h3><form data-form="league-settings"><label>Nombre de périodes</label><input name="periodCount" type="number" min="1" max="9" value="${state.league.settings?.periodCount||3}" required><label>Durée d’une période (minutes)</label><input name="periodMinutes" type="number" min="1" max="120" value="${state.league.settings?.periodMinutes||20}" required><label>Heure habituelle du lundi</label><input name="gameTime" type="time" value="${escAttr(state.league.settings?.gameTime||'20:00')}" required><label>Nombre de semaines créées d’avance</label><input name="scheduleWeeks" type="number" min="8" max="52" value="${state.league.settings?.scheduleWeeks||44}" required><p class="muted">Le calendrier crée automatiquement les lundis futurs. Dans Calendrier, un admin peut aussi ajouter un match manuel ou supprimer un lundi; un lundi supprimé ne sera pas recréé automatiquement.</p><button class="btn primary wide" style="margin-top:12px">Enregistrer</button></form></div>
-    <div class="card"><h3 style="margin-top:0">Données</h3><button class="btn wide" data-action="export-json">Exporter la ligue en JSON</button><p class="muted">Copie locale des joueurs, matchs, alignements, réponses et buts.</p></div>`:''}
-    <div class="card"><h3 style="margin-top:0">Mon compte</h3><div class="row between"><div><strong>${esc(userDisplayName())}</strong><br><span class="muted">${esc(state.user.email||'')}</span></div><span class="role-badge ${admin?'admin':'member'}">${admin?'Administrateur':'Compte normal'}</span></div><p class="muted" style="margin-top:12px">${linked?`Associé à ${esc(playerName(linked))}.`:'Aucun joueur associé à ce compte.'}</p><p class="muted">Cosom v${APP_VERSION}</p><button class="btn" data-action="logout">Déconnexion</button></div>`;
+    <div class="card"><h3 class="card-heading">Configuration des matchs</h3><form data-form="league-settings"><label>Nombre de périodes</label><input name="periodCount" type="number" min="1" max="9" value="${state.league.settings?.periodCount||3}" required><label>Durée d’une période (minutes)</label><input name="periodMinutes" type="number" min="1" max="120" value="${state.league.settings?.periodMinutes||20}" required><label>Heure habituelle du lundi</label><input name="gameTime" type="time" value="${escAttr(state.league.settings?.gameTime||'20:00')}" required><label>Nombre de semaines créées d’avance</label><input name="scheduleWeeks" type="number" min="8" max="52" value="${state.league.settings?.scheduleWeeks||44}" required><p class="muted">Le calendrier crée automatiquement les lundis futurs. Dans Calendrier, un admin peut aussi ajouter un match manuel ou supprimer un lundi; un lundi supprimé ne sera pas recréé automatiquement.</p><button class="btn primary wide" style="margin-top:12px">Enregistrer</button></form></div>
+    <div class="card"><h3 class="card-heading">Données</h3><button class="btn wide" data-action="export-json">Exporter la ligue en JSON</button><p class="muted">Copie locale des joueurs, matchs, alignements, réponses et buts.</p></div>`:''}
+    <div class="card"><h3 class="card-heading">Mon compte</h3><div class="row between"><div><strong>${esc(userDisplayName())}</strong><br><span class="muted">${esc(state.user.email||'')}</span></div><span class="role-badge ${admin?'admin':'member'}">${admin?'Administrateur':'Compte normal'}</span></div><p class="muted" style="margin-top:12px">${linked?`Associé à ${esc(playerName(linked))}.`:'Aucun joueur associé à ce compte.'}</p><p class="muted">Cosom v${APP_VERSION}</p><button class="btn" data-action="logout">Déconnexion</button></div>`;
 }
 
 function renderAuth() {

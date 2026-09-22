@@ -9,7 +9,7 @@ import {
   writeBatch, serverTimestamp, Timestamp, onSnapshot, query, orderBy, where, runTransaction, arrayUnion, arrayRemove
 } from 'https://www.gstatic.com/firebasejs/12.19.0/firebase-firestore.js';
 
-const APP_VERSION = '8.2.0';
+const APP_VERSION = '8.3.0';
 const root = document.getElementById('app');
 const modal = document.getElementById('modal');
 const toastEl = document.getElementById('toast');
@@ -42,6 +42,7 @@ const state = {
   goals: [],
   tab: 'match',
   playerTab: 'regular',
+  subPlayerTab: 'skater',
   archiveMatchTab: 'summary',
   stats: null,
   statsLoading: false,
@@ -579,7 +580,7 @@ function renderAssignmentGroup(title, type) {
     const basePosition = defaultMatchPosition(p);
     const matchFinal = state.currentMatch?.status === 'final';
     const positionLocked = matchFinal && !isAdmin();
-    const baseLabel = type==='sub'?'Remplaçant':type==='goalie'?'Gardien':'Régulier';
+    const baseLabel = type==='sub'?`Remplaçant · ${substituteRoleLabel(p)}`:type==='goalie'?'Gardien':'Régulier';
     const roleLabel = team==='absent' ? '' : ` · ${position==='goalie'?'Gardien ce match':'Joueur ce match'}${position!==basePosition?' (changé)':''}`;
     return `<div class="assignment-row">
       <div class="assignment-person">
@@ -779,15 +780,35 @@ function groupMatchesByMonth(matches) {
 function renderPlayers() {
   const types = {regular:'Joueurs réguliers',goalie:'Gardiens',sub:'Remplaçants'};
   const linked = state.member?.playerId ? findPlayer(state.member.playerId) : null;
-  const players = activePlayers().filter(p=>p.type===state.playerTab);
+  const linkedLabel = linked
+    ? linked.type==='goalie' ? 'Gardien'
+      : linked.type==='sub' ? `Remplaçant · ${substituteRoleLabel(linked)}`
+      : 'Joueur régulier'
+    : '';
+
+  let players = activePlayers().filter(p=>p.type===state.playerTab);
+  let subFilter = '';
+  if (state.playerTab === 'sub') {
+    players = players.filter(p=>substituteCanPlay(p,state.subPlayerTab));
+    subFilter = `<div class="sub-role-filter" role="tablist" aria-label="Type de remplaçant">
+      <button type="button" role="tab" aria-selected="${state.subPlayerTab==='skater'}" data-sub-player-tab="skater" class="${state.subPlayerTab==='skater'?'active':''}">Joueurs</button>
+      <button type="button" role="tab" aria-selected="${state.subPlayerTab==='goalie'}" data-sub-player-tab="goalie" class="${state.subPlayerTab==='goalie'?'active':''}">Gardiens</button>
+    </div>`;
+  }
+
   return `<div class="card"><h2>Mon joueur</h2>${linked
-      ? `<div class="notice good"><strong>${esc(playerName(linked))}</strong><br>${linked.type==='goalie'?'Gardien':linked.type==='sub'?'Remplaçant':'Joueur régulier'} · compte associé</div>`
+      ? `<div class="notice good"><strong>${esc(playerName(linked))}</strong><br>${esc(linkedLabel)} · compte associé</div>`
       : `<div class="notice alert">Ton compte n’est pas encore associé à un joueur. ${isAdmin()?'Fais l’association dans l’onglet Admin.':'Un administrateur doit associer ton compte à ton nom avant que tu puisses répondre à tes présences.'}</div>`}
     </div>
     <div class="card">
       <div class="row between"><h2 style="margin:0">Joueurs</h2>${isAdmin()?'<button class="btn primary" data-action="new-player">+ Ajouter</button>':''}</div>
       <div class="segment" style="margin-top:12px">${Object.entries(types).map(([k,v])=>`<button data-player-tab="${k}" class="${state.playerTab===k?'active':''}">${v}</button>`).join('')}</div>
-      ${players.length?players.map(p=>`<div class="list-row"><div><div class="person-name">${playerName(p)}</div><div class="person-meta">${p.type==='goalie'?'Gardien':p.type==='sub'?'Remplaçant':'Régulier'}</div></div>${isAdmin()?`<button class="btn small ghost" data-action="edit-player" data-player="${p.id}">Modifier</button>`:''}</div>`).join(''):'<div class="empty">Aucun joueur dans cette catégorie.</div>'}
+      ${subFilter}
+      ${players.length?players.map(p=>{
+        const meta = p.type==='goalie' ? 'Gardien' : p.type==='sub' ? `Remplaçant · ${substituteRoleLabel(p)}` : 'Régulier';
+        const bothBadge = p.type==='sub' && substituteRole(p)==='both' ? '<span class="sub-both-badge">JOUEUR + GARDIEN</span>' : '';
+        return `<div class="list-row player-directory-row"><div><div class="person-name">${playerName(p)}</div><div class="person-meta">${esc(meta)} ${bothBadge}</div></div>${isAdmin()?`<button class="btn small ghost" data-action="edit-player" data-player="${p.id}">Modifier</button>`:''}</div>`;
+      }).join(''):`<div class="empty">Aucun ${state.playerTab==='sub'?(state.subPlayerTab==='goalie'?'gardien remplaçant':'joueur remplaçant'):'joueur dans cette catégorie'}.</div>`}
     </div>`;
 }
 
@@ -978,6 +999,8 @@ root.addEventListener('click', async e => {
   if (tab) { state.tab=tab; render(); return; }
   const playerTab = e.target.closest('[data-player-tab]')?.dataset.playerTab;
   if (playerTab) { state.playerTab=playerTab; render(); return; }
+  const subPlayerTab = e.target.closest('[data-sub-player-tab]')?.dataset.subPlayerTab;
+  if (subPlayerTab) { state.subPlayerTab=subPlayerTab==='goalie'?'goalie':'skater'; render(); return; }
   const authMode = e.target.closest('[data-auth-mode]')?.dataset.authMode;
   if (authMode) { state.authMode=authMode; renderAuth(); return; }
   const el = e.target.closest('[data-action]');
@@ -1212,17 +1235,52 @@ async function deleteCalendarMatch(matchId) {
 
 function openPlayerEditor(player=null) {
   const type=player?.type||state.playerTab||'regular';
-  openModal(`<h2>${player?'Modifier':'Ajouter'} un joueur</h2><form data-modal-form="player" ${player?`data-player-id="${player.id}"`:''}><label>Prénom</label><input name="firstName" value="${escAttr(player?.firstName||'')}" required><label>Nom</label><input name="lastName" value="${escAttr(player?.lastName||'')}" required><label>Catégorie</label><select name="type"><option value="regular" ${type==='regular'?'selected':''}>Joueur régulier</option><option value="goalie" ${type==='goalie'?'selected':''}>Gardien</option><option value="sub" ${type==='sub'?'selected':''}>Remplaçant</option></select>${player?'<div class="notice">Archiver conserve son historique et ses statistiques passées.</div>':''}<div class="modal-actions">${player?'<button type="button" class="btn danger" data-action-modal="archive-player">Archiver</button>':''}<button type="button" class="btn" data-modal-close>Annuler</button><button class="btn primary grow">Enregistrer</button></div></form>`);
+  const subRole=player?.type==='sub'?substituteRole(player):(state.subPlayerTab||'skater');
+  openModal(`<h2>${player?'Modifier':'Ajouter'} un joueur</h2><form data-modal-form="player" ${player?`data-player-id="${player.id}"`:''}>
+    <label>Prénom</label><input name="firstName" value="${escAttr(player?.firstName||'')}" required>
+    <label>Nom</label><input name="lastName" value="${escAttr(player?.lastName||'')}" required>
+    <label>Catégorie</label>
+    <select name="type">
+      <option value="regular" ${type==='regular'?'selected':''}>Joueur régulier</option>
+      <option value="goalie" ${type==='goalie'?'selected':''}>Gardien</option>
+      <option value="sub" ${type==='sub'?'selected':''}>Remplaçant</option>
+    </select>
+    <div data-sub-role-fields ${type==='sub'?'':'hidden'}>
+      <label>Peut remplacer comme</label>
+      <select name="subRole">
+        <option value="skater" ${subRole==='skater'?'selected':''}>Joueur</option>
+        <option value="goalie" ${subRole==='goalie'?'selected':''}>Gardien</option>
+        <option value="both" ${subRole==='both'?'selected':''}>Joueur et gardien</option>
+      </select>
+      <div class="tiny sub-role-help">Ça sert au répertoire et à la position par défaut lorsqu’il est ajouté à une équipe. Pour « joueur et gardien », tu choisis sa position pour chaque match.</div>
+    </div>
+    ${player?'<div class="notice">Archiver conserve son historique et ses statistiques passées.</div>':''}
+    <div class="modal-actions">${player?'<button type="button" class="btn danger" data-action-modal="archive-player">Archiver</button>':''}<button type="button" class="btn" data-modal-close>Annuler</button><button class="btn primary grow">Enregistrer</button></div>
+  </form>`);
+
+  const typeSelect=modal.querySelector('select[name="type"]');
+  const subFields=modal.querySelector('[data-sub-role-fields]');
+  if(typeSelect && subFields){
+    const syncSubFields=()=>{subFields.hidden=typeSelect.value!=='sub';};
+    typeSelect.addEventListener('change',syncSubFields);
+    syncSubFields();
+  }
+
   const archiveBtn=modal.querySelector('[data-action-modal="archive-player"]');
   if(archiveBtn) archiveBtn.addEventListener('click',async()=>{if(confirm('Archiver ce joueur?')){await updateDoc(doc(state.db,'leagues',state.leagueId,'players',player.id),{active:false,archivedAt:serverTimestamp()});modal.close();toast('Joueur archivé.');}});
 }
 
 async function savePlayer(fd,id) {
   if(!isAdmin()) throw new Error('Réservé aux organisateurs.');
-  const data={firstName:String(fd.get('firstName')||'').trim(),lastName:String(fd.get('lastName')||'').trim(),type:String(fd.get('type')),active:true,updatedAt:serverTimestamp()};
+  const type=String(fd.get('type')||'regular');
+  const requestedSubRole=String(fd.get('subRole')||'skater');
+  const subRole=['skater','goalie','both'].includes(requestedSubRole)?requestedSubRole:'skater';
+  const data={firstName:String(fd.get('firstName')||'').trim(),lastName:String(fd.get('lastName')||'').trim(),type,subRole:type==='sub'?subRole:null,active:true,updatedAt:serverTimestamp()};
   if(id) await setDoc(doc(state.db,'leagues',state.leagueId,'players',id),data,{merge:true});
   else await addDoc(collection(state.db,'leagues',state.leagueId,'players'),{...data,createdAt:serverTimestamp()});
-  state.playerTab=data.type; modal.close(); state.tab='players'; toast('Joueur enregistré.');
+  state.playerTab=data.type;
+  if(data.type==='sub') state.subPlayerTab=data.subRole==='goalie'?'goalie':'skater';
+  modal.close(); state.tab='players'; toast('Joueur enregistré.');
 }
 
 async function setAssignment(playerId,team) {
@@ -1508,7 +1566,23 @@ async function playAlarm(){await unlockAudio();await requestWakeLock();if(!audio
 
 // ---------- Helpers ----------
 function activePlayers(){return state.players.filter(p=>p.active!==false);}
-function defaultMatchPosition(p){return p?.type==='goalie'?'goalie':'skater';}
+function substituteRole(p){
+  if(p?.type!=='sub') return null;
+  return p?.subRole==='goalie'||p?.subRole==='both'?p.subRole:'skater';
+}
+function substituteCanPlay(p,position){
+  const role=substituteRole(p);
+  return role==='both'||role===position;
+}
+function substituteRoleLabel(p){
+  const role=substituteRole(p);
+  return role==='goalie'?'Gardien':role==='both'?'Joueur + gardien':'Joueur';
+}
+function defaultMatchPosition(p){
+  if(p?.type==='goalie') return 'goalie';
+  if(p?.type==='sub' && substituteRole(p)==='goalie') return 'goalie';
+  return 'skater';
+}
 function matchPosition(p,assignment){return assignment?.position==='goalie'||assignment?.position==='skater'?assignment.position:defaultMatchPosition(p);}
 function buildFinalLineup(overridePlayerId=null,overridePosition=null){
   return [...state.assignments.entries()]

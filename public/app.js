@@ -9,7 +9,7 @@ import {
   writeBatch, serverTimestamp, Timestamp, onSnapshot, query, orderBy, where, runTransaction, arrayUnion, arrayRemove
 } from 'https://www.gstatic.com/firebasejs/12.19.0/firebase-firestore.js';
 
-const APP_VERSION = '8.0.0';
+const APP_VERSION = '8.1.0';
 const root = document.getElementById('app');
 const modal = document.getElementById('modal');
 const toastEl = document.getElementById('toast');
@@ -337,18 +337,30 @@ function render() {
       </header>
       <main class="page">${renderCurrentTab()}</main>
       <nav class="bottom-nav" aria-label="Navigation principale">
-        ${navButton('match','🏒','Match')}
-        ${navButton('calendar','▦','Calendrier')}
-        ${navButton('players','👥','Joueurs')}
-        ${navButton('stats','▥','Stats')}
-        ${navButton('settings','⚙',isAdmin()?'Admin':'Compte')}
+        ${navButton('match','match','Match')}
+        ${navButton('calendar','calendar','Calendrier')}
+        ${navButton('players','players','Joueurs')}
+        ${navButton('stats','stats','Stats')}
+        ${navButton('settings','settings',isAdmin()?'Admin':'Compte')}
       </nav>
     </div>`;
   requestAnimationFrame(updateClockDisplay);
 }
 
 function navButton(tab, icon, label) {
-  return `<button data-tab="${tab}" class="${state.tab===tab?'active':''}"><span class="ico">${icon}</span>${label}</button>`;
+  return `<button data-tab="${tab}" class="${state.tab===tab?'active':''}"><span class="ico" aria-hidden="true">${navIcon(icon)}</span><span class="nav-label">${label}</span></button>`;
+}
+
+function navIcon(name) {
+  const common = 'viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"';
+  const icons = {
+    match: `<svg ${common}><path d="M4 20 20 4"/><path d="M7 4h4l2 2"/><path d="M17 20h-4l-2-2"/><path d="M5 15h5"/><circle cx="18" cy="17" r="2"/></svg>`,
+    calendar: `<svg ${common}><rect x="3" y="5" width="18" height="16" rx="2"/><path d="M8 3v4M16 3v4M3 10h18"/><path d="M8 14h.01M12 14h.01M16 14h.01M8 18h.01M12 18h.01"/></svg>`,
+    players: `<svg ${common}><path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M22 21v-2a4 4 0 0 0-3-3.87M16 3.13a4 4 0 0 1 0 7.75"/></svg>`,
+    stats: `<svg ${common}><path d="M4 20V10M10 20V4M16 20v-7M22 20V7"/></svg>`,
+    settings: `<svg ${common}><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06-2.83 2.83-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 .6 1.65 1.65 0 0 0-.28 1.08V21H10v-.09a1.65 1.65 0 0 0-1.08-1.56 1.65 1.65 0 0 0-1.82.33l-.06.06-2.83-2.83.06-.06A1.65 1.65 0 0 0 4.6 15a1.65 1.65 0 0 0-.6-1 1.65 1.65 0 0 0-1.08-.28H3v-4h.09A1.65 1.65 0 0 0 4.65 8.6a1.65 1.65 0 0 0-.33-1.82l-.06-.06 2.83-2.83.06.06A1.65 1.65 0 0 0 9 4.6a1.65 1.65 0 0 0 1-.6A1.65 1.65 0 0 0 10.28 3H14v.09A1.65 1.65 0 0 0 15.08 4.65a1.65 1.65 0 0 0 1.82-.33l.06-.06 2.83 2.83-.06.06A1.65 1.65 0 0 0 19.4 9c.15.37.38.7.68.96.3.25.68.39 1.08.4H21v4h-.09A1.65 1.65 0 0 0 19.4 15Z"/></svg>`
+  };
+  return icons[name] || icons.match;
 }
 
 function renderCurrentTab() {

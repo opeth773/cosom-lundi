@@ -9,7 +9,7 @@ import {
   writeBatch, serverTimestamp, Timestamp, onSnapshot, query, orderBy, where, runTransaction, arrayUnion, arrayRemove
 } from 'https://www.gstatic.com/firebasejs/12.19.0/firebase-firestore.js';
 
-const APP_VERSION = '7.8.0';
+const APP_VERSION = '8.0.0';
 const root = document.getElementById('app');
 const modal = document.getElementById('modal');
 const toastEl = document.getElementById('toast');
@@ -42,6 +42,7 @@ const state = {
   goals: [],
   tab: 'match',
   playerTab: 'regular',
+  archiveMatchTab: 'summary',
   stats: null,
   statsLoading: false,
   leagueUnsubs: [],
@@ -292,6 +293,7 @@ function selectMatch(matchId) {
   state.assignments = new Map();
   state.responses = new Map();
   state.goals = [];
+  state.archiveMatchTab = 'summary';
   state.clockZeroHandled = false;
   const base = ['leagues', state.leagueId, 'matches', matchId];
   state.matchUnsubs.push(onSnapshot(doc(state.db, ...base), snap => {
@@ -368,22 +370,27 @@ function renderMatch() {
   }
   const score = getScore();
   const periodCount = current.periodCount || state.league.settings?.periodCount || 3;
-  const remaining = getRemainingSeconds(current);
-  const canClear = !current.startedAt && state.goals.length === 0 && state.assignments.size > 0;
-  const alarmMine = current.alarmDeviceId === DEVICE_ID;
-  const alarmText = alarmMine ? 'Alarme sur cet appareil' : current.alarmDeviceName ? `Alarme: ${esc(current.alarmDeviceName)}` : 'Aucune alarme assignée';
   const periodRows = Array.from({length:periodCount}, (_,i) => {
     const p = i+1;
     const d = state.goals.filter(g=>g.period===p && g.team==='dark').length;
     const l = state.goals.filter(g=>g.period===p && g.team==='light').length;
     return {p,d,l};
   });
+
+  if (current.status === 'final') {
+    return `${selector}${renderArchivedMatch(current, score, periodCount, periodRows)}`;
+  }
+
+  const remaining = getRemainingSeconds(current);
+  const canClear = !current.startedAt && state.goals.length === 0 && state.assignments.size > 0;
+  const alarmMine = current.alarmDeviceId === DEVICE_ID;
+  const alarmText = alarmMine ? 'Alarme sur cet appareil' : current.alarmDeviceName ? `Alarme: ${esc(current.alarmDeviceName)}` : 'Aucune alarme assignée';
   return `
     ${selector}
     <div class="card">
       <div class="row between">
         <div><h2 style="margin:0">${formatDate(current.startAt)}</h2><div class="muted">${formatTime(current.startAt)}${current.location?' · '+esc(current.location):''}</div></div>
-        <span class="pill ${current.status==='live'?'live':''}">${current.status==='final'?'Final':current.status==='live'?'En cours':'À venir'}</span>
+        <span class="pill ${current.status==='live'?'live':''}">${current.status==='live'?'En cours':'À venir'}</span>
       </div>
     </div>
     <section class="scoreboard">
@@ -393,23 +400,20 @@ function renderMatch() {
       </div>
       <div id="clockText" class="clock">${formatClock(remaining)}</div>
       <div class="period-label">Période ${Math.min(current.period||1,periodCount)} / ${periodCount}</div>
-      ${current.status!=='final' ? `
-        <div class="grid2" style="margin-top:10px">
-          <button class="btn primary" data-action="toggle-clock">${current.clock?.running?'Pause':'Démarrer'}</button>
-          <button class="btn" data-action="reset-clock">Réinitialiser chrono</button>
-        </div>
-        <div class="grid2" style="margin-top:7px">
-          <button class="btn" data-action="claim-alarm">${alarmMine?'✓ Alarme active':'Prendre l’alarme'}</button>
-          ${current.period < periodCount ? '<button class="btn" data-action="next-period">Période suivante</button>' : '<button class="btn" data-action="finalize-match">Terminer le match</button>'}
-        </div>
-        <div class="center tiny" style="margin-top:8px">${alarmText}</div>
-      ` : ''}
+      <div class="grid2" style="margin-top:10px">
+        <button class="btn primary" data-action="toggle-clock">${current.clock?.running?'Pause':'Démarrer'}</button>
+        <button class="btn" data-action="reset-clock">Réinitialiser chrono</button>
+      </div>
+      <div class="grid2" style="margin-top:7px">
+        <button class="btn" data-action="claim-alarm">${alarmMine?'✓ Alarme active':'Prendre l’alarme'}</button>
+        ${current.period < periodCount ? '<button class="btn" data-action="next-period">Période suivante</button>' : '<button class="btn" data-action="finalize-match">Terminer le match</button>'}
+      </div>
+      <div class="center tiny" style="margin-top:8px">${alarmText}</div>
     </section>
-    ${current.status!=='final' ? `
-      <div class="grid2">
-        <button class="btn goalbtn" data-action="new-goal" data-team="dark"><strong>+ But Foncés</strong></button>
-        <button class="btn goalbtn" data-action="new-goal" data-team="light"><strong>+ But Pâles</strong></button>
-      </div>` : ''}
+    <div class="grid2">
+      <button class="btn goalbtn" data-action="new-goal" data-team="dark"><strong>+ But Foncés</strong></button>
+      <button class="btn goalbtn" data-action="new-goal" data-team="light"><strong>+ But Pâles</strong></button>
+    </div>
     <div class="card">
       <div class="row between"><h3 style="margin:0">Alignements</h3>${canClear?'<button class="btn small ghost" data-action="clear-teams">Vider les équipes</button>':''}</div>
       ${renderAssignmentGroup('Joueurs réguliers','regular')}
@@ -423,6 +427,128 @@ function renderMatch() {
       <tr><td>Pâles</td>${periodRows.map(x=>`<td>${x.l}</td>`).join('')}<td><strong>${score.light}</strong></td></tr></tbody></table>
     </div>
     <div class="card"><h3 style="margin-top:0">Buts</h3>${renderGoals()}</div>
+  `;
+}
+
+function renderArchivedMatch(current, score, periodCount, periodRows) {
+  const view = state.archiveMatchTab === 'lineups' ? 'lineups' : 'summary';
+  return `
+    <div class="card archive-match-header">
+      <div>
+        <div class="archive-kicker">MATCH TERMINÉ</div>
+        <h2>${formatDate(current.startAt)}</h2>
+        <div class="muted">${formatTime(current.startAt)}${current.location?' · '+esc(current.location):''}</div>
+      </div>
+      <span class="pill archive-final-pill">Final</span>
+    </div>
+    <div class="archive-tabs" role="tablist" aria-label="Détails du match">
+      <button type="button" role="tab" aria-selected="${view==='summary'}" class="${view==='summary'?'active':''}" data-action="archive-match-tab" data-view="summary">Résumé</button>
+      <button type="button" role="tab" aria-selected="${view==='lineups'}" class="${view==='lineups'?'active':''}" data-action="archive-match-tab" data-view="lineups">Alignements</button>
+    </div>
+    ${view === 'lineups' ? renderArchivedLineups(current) : renderArchivedSummary(current, score, periodCount, periodRows)}
+  `;
+}
+
+function renderArchivedSummary(current, score, periodCount, periodRows) {
+  return `
+    <section class="card archive-boxscore">
+      <div class="archive-score-main">
+        <div class="archive-team archive-team-dark">
+          <span class="archive-team-dot"></span>
+          <strong>Foncés</strong>
+        </div>
+        <div class="archive-score-value"><strong>${score.dark}</strong><span>–</span><strong>${score.light}</strong></div>
+        <div class="archive-team archive-team-light">
+          <span class="archive-team-dot"></span>
+          <strong>Pâles</strong>
+        </div>
+      </div>
+      <div class="archive-line-score-wrap">
+        <table class="archive-line-score">
+          <thead><tr><th>Équipe</th>${periodRows.map(x=>`<th>${x.p}</th>`).join('')}<th>T</th></tr></thead>
+          <tbody>
+            <tr><td>Foncés</td>${periodRows.map(x=>`<td>${x.d}</td>`).join('')}<td><strong>${score.dark}</strong></td></tr>
+            <tr><td>Pâles</td>${periodRows.map(x=>`<td>${x.l}</td>`).join('')}<td><strong>${score.light}</strong></td></tr>
+          </tbody>
+        </table>
+      </div>
+    </section>
+    <div class="archive-section-title"><h2>Sommaire des buts</h2><span>${state.goals.length} but${state.goals.length===1?'':'s'}</span></div>
+    ${renderArchivedScoring(periodCount)}
+  `;
+}
+
+function renderArchivedScoring(periodCount) {
+  const blocks = [];
+  for (let p=1; p<=periodCount; p++) {
+    const goals = state.goals
+      .filter(g=>Number(g.period)===p)
+      .sort((a,b)=>(Number(a.elapsedSeconds)||0)-(Number(b.elapsedSeconds)||0));
+    blocks.push(`
+      <section class="archive-period-block">
+        <div class="archive-period-title"><h3>${p===1?'1re':`${p}e`} période</h3><span>${goals.length} but${goals.length===1?'':'s'}</span></div>
+        ${goals.length ? `<div class="archive-goal-list">${goals.map(renderArchivedGoal).join('')}</div>` : '<div class="archive-period-empty">Aucun but.</div>'}
+      </section>
+    `);
+  }
+  return blocks.join('');
+}
+
+function renderArchivedGoal(g) {
+  const scorer = findPlayer(g.scorerId);
+  const assistNames = (g.assists||[]).map(id=>playerName(findPlayer(id))).filter(Boolean);
+  const remaining = goalClockRemainingSeconds(g, state.currentMatch);
+  const clockLabel = remaining == null ? '--:--' : formatClock(remaining);
+  return `
+    <div class="archive-goal-row">
+      <div class="archive-goal-clock">${clockLabel}</div>
+      <div class="archive-goal-team ${g.team==='dark'?'dark':'light'}" aria-label="${g.team==='dark'?'Foncés':'Pâles'}">${g.team==='dark'?'F':'P'}</div>
+      <div class="archive-goal-info">
+        <div class="archive-goal-scorer">${esc(playerName(scorer)||'Joueur archivé')}</div>
+        <div class="archive-goal-assists">${assistNames.length?`Passes : ${esc(assistNames.join(', '))}`:'Sans aide'}</div>
+      </div>
+    </div>
+  `;
+}
+
+function renderArchivedLineups(current) {
+  let lineup = Array.isArray(current.finalLineup) && current.finalLineup.length
+    ? current.finalLineup
+    : [...state.assignments.entries()]
+        .filter(([,a])=>a.team==='dark'||a.team==='light')
+        .map(([playerId,a])=>({playerId,team:a.team,position:matchPosition(findPlayer(playerId),a)}));
+
+  const teamCard = (team, label) => {
+    const entries = lineup.filter(a=>a.team===team);
+    const goalies = entries.filter(a=>a.position==='goalie');
+    const skaters = entries.filter(a=>a.position!=='goalie');
+    const renderNames = rows => rows.length
+      ? rows.map(a=>{
+          const p=findPlayer(a.playerId);
+          const sub=p?.type==='sub' ? '<span class="archive-sub-badge">REMPL.</span>' : '';
+          return `<div class="archive-lineup-player"><span>${esc(playerName(p)||'Joueur archivé')}</span>${sub}</div>`;
+        }).join('')
+      : '<div class="archive-lineup-empty">Aucun</div>';
+    return `
+      <section class="archive-lineup-team ${team}">
+        <div class="archive-lineup-team-head"><span class="archive-team-dot"></span><strong>${label}</strong><span>${entries.length}</span></div>
+        <div class="archive-lineup-role">Gardien${goalies.length>1?'s':''}</div>
+        <div class="archive-lineup-list">${renderNames(goalies)}</div>
+        <div class="archive-lineup-role">Joueurs</div>
+        <div class="archive-lineup-list">${renderNames(skaters)}</div>
+      </section>
+    `;
+  };
+
+  return `
+    <div class="card archive-lineups-intro">
+      <h2>Alignements</h2>
+      <p class="muted">Alignements finaux de cette partie. Les positions affichées sont celles qui comptent dans les statistiques de la saison.</p>
+    </div>
+    <div class="archive-lineups-grid">
+      ${teamCard('dark','Foncés')}
+      ${teamCard('light','Pâles')}
+    </div>
   `;
 }
 
@@ -871,6 +997,7 @@ root.addEventListener('click', async e => {
     else if (action==='calendar-attendance') openCalendarAttendance(el.dataset.match,el.dataset.status);
     else if (action==='calendar-match') { selectMatch(el.dataset.match); state.tab='calendar'; render(); }
     else if (action==='open-history-match') { selectMatch(el.dataset.match); state.tab='match'; render(); }
+    else if (action==='archive-match-tab') { state.archiveMatchTab=el.dataset.view==='lineups'?'lineups':'summary'; render(); }
     else if (action==='open-match-tab') { state.tab='match'; render(); }
     else if (action==='copy-invite') await copyInvite();
     else if (action==='export-json') await exportLeagueJson();

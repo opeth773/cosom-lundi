@@ -9,7 +9,7 @@ import {
   writeBatch, serverTimestamp, Timestamp, onSnapshot, query, orderBy, where, runTransaction, arrayUnion, arrayRemove, deleteField
 } from 'https://www.gstatic.com/firebasejs/12.19.0/firebase-firestore.js';
 
-const APP_VERSION = '8.6.0';
+const APP_VERSION = '8.7.0';
 const root = document.getElementById('app');
 const modal = document.getElementById('modal');
 const toastEl = document.getElementById('toast');
@@ -602,11 +602,17 @@ function renderAssignmentGroup(title, positionGroup) {
     .filter(p => {
       const assignment = state.assignments.get(p.id);
       const assigned = assignment?.team === 'dark' || assignment?.team === 'light';
+      const responseStatus = getMatchResponseStatus(state.currentMatch, p.id);
 
-      // Les joueurs réguliers et les gardiens de la ligue restent toujours disponibles
-      // dans l'écran d'alignement. Un remplaçant n'y apparaît que lorsqu'il a confirmé
-      // qu'il est disponible pour CE match (ou s'il est déjà assigné à une équipe).
-      if (p.type === 'sub' && !assigned && getMatchResponseStatus(state.currentMatch, p.id) !== 'yes') return false;
+      // Avant le début du match, une absence confirmée dans le calendrier retire
+      // complètement le joueur de l'écran d'alignement. Une fois le match commencé,
+      // l'alignement réel demeure l'autorité afin qu'un changement de présence tardif
+      // ne fasse jamais disparaître quelqu'un d'une partie en cours.
+      if (state.currentMatch?.status === 'scheduled' && responseStatus === 'no') return false;
+
+      // Un remplaçant n'y apparaît que lorsqu'il a confirmé qu'il est disponible
+      // pour CE match (ou s'il est déjà assigné à une équipe).
+      if (p.type === 'sub' && !assigned && responseStatus !== 'yes') return false;
 
       // Une fois assigné, on classe le joueur selon sa position pour ce match.
       // Avant l'assignation, on utilise sa position par défaut. Un remplaçant
@@ -1541,13 +1547,25 @@ async function setResponseForMatch(matchId,playerId,status) {
   if(!['yes','no','maybe'].includes(status)) throw new Error('Réponse invalide.');
   const responseRef=doc(state.db,'leagues',state.leagueId,'matches',matchId,'responses',playerId);
   const matchDocRef=doc(state.db,'leagues',state.leagueId,'matches',matchId);
+  const targetMatch=state.matches.find(m=>m.id===matchId) || (state.currentMatch?.id===matchId?state.currentMatch:null);
   const batch=writeBatch(state.db);
   batch.set(responseRef,{playerId,status,updatedBy:state.user.uid,updatedAt:serverTimestamp()},{merge:true});
   batch.update(matchDocRef,{[`attendance.${playerId}`]:status});
+
+  // Si quelqu'un est déclaré absent avant la partie, on retire aussi toute ancienne
+  // assignation Foncés/Pâles. Cela garde le calendrier et l'alignement parfaitement
+  // synchronisés sans toucher à une partie qui est déjà en cours.
+  if(status==='no' && targetMatch?.status==='scheduled') {
+    batch.delete(doc(state.db,'leagues',state.leagueId,'matches',matchId,'assignments',playerId));
+  }
+
   await batch.commit();
   const listMatch=state.matches.find(m=>m.id===matchId);
   if(listMatch) listMatch.attendance={...(listMatch.attendance||{}),[playerId]:status};
-  if(state.currentMatch?.id===matchId) state.currentMatch.attendance={...(state.currentMatch.attendance||{}),[playerId]:status};
+  if(state.currentMatch?.id===matchId) {
+    state.currentMatch.attendance={...(state.currentMatch.attendance||{}),[playerId]:status};
+    if(status==='no' && targetMatch?.status==='scheduled') state.assignments.delete(playerId);
+  }
   toast(status==='yes'?'Présence confirmée.':status==='no'?'Absence enregistrée.':'Réponse mise à incertain.');
 }
 

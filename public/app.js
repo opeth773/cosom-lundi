@@ -9,7 +9,7 @@ import {
   writeBatch, serverTimestamp, Timestamp, onSnapshot, query, orderBy, where, runTransaction, arrayUnion, arrayRemove, deleteField
 } from 'https://www.gstatic.com/firebasejs/12.19.0/firebase-firestore.js';
 
-const APP_VERSION = '8.5.0';
+const APP_VERSION = '8.6.0';
 const root = document.getElementById('app');
 const modal = document.getElementById('modal');
 const toastEl = document.getElementById('toast');
@@ -429,9 +429,8 @@ function renderMatch() {
     </div>
     <div class="card">
       <div class="row between"><h3 class="card-heading compact">Alignements</h3>${canClear?'<button class="btn small ghost" data-action="clear-teams">Vider les équipes</button>':''}</div>
-      ${renderAssignmentGroup('Joueurs réguliers','regular')}
+      ${renderAssignmentGroup('Joueurs','skater')}
       ${renderAssignmentGroup('Gardiens','goalie')}
-      ${renderAssignmentGroup('Remplaçants','sub')}
     </div>
     <div class="card">
       <h3 class="card-heading">Résultat par période</h3>
@@ -598,8 +597,31 @@ function renderMatchSelector() {
   </div>`;
 }
 
-function renderAssignmentGroup(title, type) {
-  const players = activePlayers().filter(p => p.type === type);
+function renderAssignmentGroup(title, positionGroup) {
+  const players = activePlayers()
+    .filter(p => {
+      const assignment = state.assignments.get(p.id);
+      const assigned = assignment?.team === 'dark' || assignment?.team === 'light';
+
+      // Les joueurs réguliers et les gardiens de la ligue restent toujours disponibles
+      // dans l'écran d'alignement. Un remplaçant n'y apparaît que lorsqu'il a confirmé
+      // qu'il est disponible pour CE match (ou s'il est déjà assigné à une équipe).
+      if (p.type === 'sub' && !assigned && getMatchResponseStatus(state.currentMatch, p.id) !== 'yes') return false;
+
+      // Une fois assigné, on classe le joueur selon sa position pour ce match.
+      // Avant l'assignation, on utilise sa position par défaut. Un remplaçant
+      // « joueur + gardien » apparaît donc d'abord avec les joueurs, puis peut
+      // être déplacé chez les gardiens avec le contrôle Position ce match.
+      const effectivePosition = assigned ? matchPosition(p, assignment) : defaultMatchPosition(p);
+      return effectivePosition === positionGroup;
+    })
+    .sort((a,b) => {
+      const aSub = a.type === 'sub' ? 1 : 0;
+      const bSub = b.type === 'sub' ? 1 : 0;
+      if (aSub !== bSub) return aSub - bSub;
+      return playerName(a).localeCompare(playerName(b), 'fr', {sensitivity:'base'});
+    });
+
   if (!players.length) return '';
   return `<h3 class="group-heading">${title}</h3>${players.map(p => {
     const assignment = state.assignments.get(p.id);
@@ -608,7 +630,7 @@ function renderAssignmentGroup(title, type) {
     const basePosition = defaultMatchPosition(p);
     const matchFinal = state.currentMatch?.status === 'final';
     const positionLocked = matchFinal && !isAdmin();
-    const baseLabel = type==='sub'?`Remplaçant · ${substituteRoleLabel(p)}`:type==='goalie'?'Gardien':'Régulier';
+    const baseLabel = p.type==='sub'?`Remplaçant · ${substituteRoleLabel(p)}`:p.type==='goalie'?'Gardien':'Régulier';
     const roleLabel = team==='absent' ? '' : ` · ${position==='goalie'?'Gardien ce match':'Joueur ce match'}${position!==basePosition?' (changé)':''}`;
     return `<div class="assignment-row">
       <div class="assignment-person">

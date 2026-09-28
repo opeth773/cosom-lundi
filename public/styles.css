@@ -3548,3 +3548,264 @@ tbody td:first-child {
   }
 }
 
+
+/* v8.5 — attendance workflow shared between Match and Calendar */
+.match-switcher {
+  display: grid;
+  gap: 12px;
+}
+
+.match-switcher-top {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.match-switcher-label {
+  margin-bottom: 3px;
+  color: var(--ink);
+  font-size: 13px;
+  font-weight: 900;
+  letter-spacing: .01em;
+}
+
+.match-live-return {
+  width: 100%;
+  min-height: 56px;
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 12px;
+  border: 1px solid #b9cffd;
+  border-radius: 13px;
+  background: #eff5ff;
+  color: #173d8f;
+  text-align: left;
+}
+
+.match-live-return strong,
+.match-live-return small {
+  display: block;
+}
+
+.match-live-return strong {
+  font-size: 12px;
+  font-weight: 900;
+}
+
+.match-live-return small {
+  margin-top: 2px;
+  color: #536b98;
+  font-size: 10.5px;
+}
+
+.match-live-dot {
+  width: 9px;
+  height: 9px;
+  border-radius: 50%;
+  background: #2d6cf2;
+  box-shadow: 0 0 0 5px rgba(45,108,242,.12);
+}
+
+.match-live-arrow {
+  font-size: 18px;
+  font-weight: 900;
+}
+
+.match-quick-attendance {
+  display: grid;
+  grid-template-columns: minmax(120px, .8fr) minmax(260px, 1.35fr) auto;
+  align-items: center;
+  gap: 10px;
+  padding: 11px;
+  border: 1px solid var(--line);
+  border-radius: 13px;
+  background: var(--surface-subtle, #f8faff);
+}
+
+.match-quick-copy {
+  min-width: 0;
+}
+
+.match-quick-copy strong {
+  display: block;
+  margin-top: 2px;
+  font-size: 13px;
+}
+
+.match-quick-kicker {
+  display: block;
+  color: var(--sub);
+  font-size: 9px;
+  font-weight: 900;
+  letter-spacing: .08em;
+}
+
+.match-quick-attendance .calendar-response-buttons {
+  margin: 0;
+}
+
+.match-manage-attendance {
+  white-space: nowrap;
+}
+
+.calendar-admin-actions {
+  gap: 7px;
+  flex-wrap: wrap;
+}
+
+.admin-attendance-help {
+  margin: 10px 0 14px;
+  padding: 9px 10px;
+  border-radius: 10px;
+  background: var(--soft);
+  color: var(--sub);
+  font-size: 11px;
+  line-height: 1.45;
+}
+
+.admin-attendance-group + .admin-attendance-group {
+  margin-top: 15px;
+}
+
+.admin-attendance-row {
+  display: grid;
+  grid-template-columns: minmax(130px, 1fr) minmax(300px, auto);
+  gap: 12px;
+  align-items: center;
+  padding: 11px 4px;
+  border-bottom: 1px solid var(--row-line, var(--line));
+}
+
+.admin-attendance-row:last-child {
+  border-bottom: 0;
+}
+
+.admin-attendance-person {
+  min-width: 0;
+}
+
+.admin-attendance-person strong,
+.admin-attendance-person span {
+  display: block;
+}
+
+.admin-attendance-person strong {
+  overflow-wrap: anywhere;
+  font-size: 12px;
+}
+
+.admin-attendance-person span {
+  margin-top: 2px;
+  color: var(--sub);
+  font-size: 10px;
+}
+
+.admin-attendance-buttons {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(68px, auto)) 34px;
+  gap: 5px;
+}
+
+.admin-attendance-buttons button {
+  min-height: 34px;
+  padding: 5px 8px;
+  border: 1px solid var(--line);
+  border-radius: 9px;
+  background: var(--surface);
+  color: var(--sub);
+  font-size: 10px;
+  font-weight: 850;
+}
+
+.admin-attendance-buttons button.active.yes {
+  border-color: #a9dbc0;
+  background: #e7f7ee;
+  color: #17633b;
+}
+
+.admin-attendance-buttons button.active.maybe {
+  border-color: #e8c76e;
+  background: #fff5d8;
+  color: #795500;
+}
+
+.admin-attendance-buttons button.active.no {
+  border-color: #efb8bc;
+  background: #fff0f1;
+  color: #9b2631;
+}
+
+.admin-attendance-buttons .admin-attendance-clear.active {
+  border-color: #bcc8da;
+  background: var(--soft);
+  color: var(--ink);
+}
+
+@media (max-width: 640px) {
+  .match-switcher-top {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .match-switcher-top > .btn {
+    width: 100%;
+  }
+
+  .match-quick-attendance {
+    grid-template-columns: 1fr;
+    align-items: stretch;
+  }
+
+  .match-quick-attendance .calendar-response-buttons {
+    width: 100%;
+    display: grid;
+    grid-template-columns: repeat(3, 1fr);
+  }
+
+  .match-manage-attendance {
+    width: 100%;
+  }
+
+  .admin-attendance-row {
+    grid-template-columns: 1fr;
+    gap: 8px;
+    padding: 12px 2px;
+  }
+
+  .admin-attendance-buttons {
+    grid-template-columns: repeat(3, 1fr) 36px;
+  }
+}
+
+@media (prefers-color-scheme: dark) {
+  .match-live-return {
+    border-color: #31548e;
+    background: #172a49;
+    color: #b9ceff;
+  }
+
+  .match-live-return small {
+    color: #92a8cf;
+  }
+
+  .admin-attendance-buttons button.active.yes {
+    border-color: #285f43;
+    background: #173d2a;
+    color: #a8e1bd;
+  }
+
+  .admin-attendance-buttons button.active.maybe {
+    border-color: #66511f;
+    background: #443718;
+    color: #ffdda0;
+  }
+
+  .admin-attendance-buttons button.active.no {
+    border-color: #6d3940;
+    background: #462328;
+    color: #ffc1c7;
+  }
+}

@@ -6,10 +6,10 @@ import {
 } from 'https://www.gstatic.com/firebasejs/12.19.0/firebase-auth.js';
 import {
   getFirestore, collection, doc, getDoc, getDocs, setDoc, addDoc, updateDoc, deleteDoc,
-  writeBatch, serverTimestamp, Timestamp, onSnapshot, query, orderBy, where, runTransaction, arrayUnion, arrayRemove
+  writeBatch, serverTimestamp, Timestamp, onSnapshot, query, orderBy, where, runTransaction, arrayUnion, arrayRemove, deleteField
 } from 'https://www.gstatic.com/firebasejs/12.19.0/firebase-firestore.js';
 
-const APP_VERSION = '8.3.0';
+const APP_VERSION = '8.5.0';
 const root = document.getElementById('app');
 const modal = document.getElementById('modal');
 const toastEl = document.getElementById('toast');
@@ -566,8 +566,36 @@ function renderArchivedLineups(current) {
 }
 
 function renderMatchSelector() {
+  const current = state.currentMatch;
+  const liveMatch = state.matches.find(m => m.status === 'live');
+  const mine = state.member?.playerId ? findPlayer(state.member.playerId) : null;
   const opts = state.matches.map(m => `<option value="${m.id}" ${m.id===state.selectedMatchId?'selected':''}>${formatDate(m.startAt)} · ${m.status==='final'?'Final':m.status==='live'?'En cours':'À venir'}</option>`).join('');
-  return `<div class="card"><div class="row"><div class="grow"><select aria-label="Choisir le match" data-change="select-match"><option value="">${state.matches.length?'Choisir…':'Aucun match'}</option>${opts}</select></div>${isAdmin()?'<button class="btn primary" data-action="new-match">+ Match</button>':''}</div></div>`;
+  const mineStatus = current && mine ? getMatchResponseStatus(current, mine.id) : 'unknown';
+  const mineLabel = mine?.type==='sub'
+    ? ({yes:'Disponible',no:'Indispo',maybe:'Incertain',unknown:'Non répondu'}[mineStatus])
+    : ({yes:'Présent',no:'Absent',maybe:'Incertain',unknown:'Non répondu'}[mineStatus]);
+  const liveJump = liveMatch && liveMatch.id !== state.selectedMatchId
+    ? `<button type="button" class="match-live-return" data-action="jump-live-match" data-match="${liveMatch.id}"><span class="match-live-dot" aria-hidden="true"></span><span><strong>Match en cours</strong><small>${formatShortDate(liveMatch.startAt)} · ${formatTime(liveMatch.startAt)}</small></span><span class="match-live-arrow" aria-hidden="true">→</span></button>`
+    : '';
+  const attendance = current?.status === 'scheduled'
+    ? `<div class="match-quick-attendance">
+        <div class="match-quick-copy">
+          <span class="match-quick-kicker">PRÉSENCE POUR CE MATCH</span>
+          <strong>${mine ? esc(mineLabel) : 'Compte non associé'}</strong>
+        </div>
+        ${mine ? renderCalendarResponseButtons(current,mine,mineStatus) : '<div class="tiny muted">Un admin doit associer ton compte à un joueur.</div>'}
+        ${isAdmin()?`<button type="button" class="btn small match-manage-attendance" data-action="admin-attendance" data-match="${current.id}">Gérer les présences</button>`:''}
+      </div>`
+    : '';
+  return `<div class="card match-switcher">
+    <div class="match-switcher-top">
+      <div class="grow"><div class="match-switcher-label">Match affiché</div><div class="muted">Choisis une date pour consulter la game ou donner ta présence.</div></div>
+      ${isAdmin()?'<button class="btn primary" data-action="new-match">+ Match</button>':''}
+    </div>
+    <select aria-label="Choisir le match" data-change="select-match"><option value="">${state.matches.length?'Choisir…':'Aucun match'}</option>${opts}</select>
+    ${liveJump}
+    ${attendance}
+  </div>`;
 }
 
 function renderAssignmentGroup(title, type) {
@@ -669,7 +697,10 @@ function renderCalendarRow(m, mine) {
       ${summary.subMaybeNames.length?`<div class="calendar-names"><strong>Remplaçants incertains :</strong> ${esc(summary.subMaybeNames.join(', '))}</div>`:''}
     </div>
     ${mine?`<div class="calendar-my"><div class="tiny">Moi : <strong>${esc(mineLabel)}</strong></div>${renderCalendarResponseButtons(m,mine,mineStatus)}</div>`:''}
-    ${isAdmin() && m.status==='scheduled'?`<div class="calendar-admin-actions"><button class="btn small danger" data-action="delete-calendar-match" data-match="${m.id}">Supprimer ce match</button></div>`:''}
+    ${isAdmin()?`<div class="calendar-admin-actions">
+      <button class="btn small" data-action="admin-attendance" data-match="${m.id}">Gérer les présences</button>
+      ${m.status==='scheduled'?`<button class="btn small danger" data-action="delete-calendar-match" data-match="${m.id}">Supprimer ce match</button>`:''}
+    </div>`:''}
   </div>`;
 }
 
@@ -688,6 +719,39 @@ function openCalendarAttendance(matchId, status) {
     ? `<div class="attendance-name-list">${group.names.map(name=>`<div class="attendance-name-row">${esc(name)}</div>`).join('')}</div>`
     : '<div class="empty">Personne dans cette catégorie.</div>';
   openModal(`<h2>${esc(group.title)}</h2><div class="muted">${formatDate(match.startAt)} · ${formatTime(match.startAt)}</div>${list}<div class="modal-actions"><button type="button" class="btn primary wide" data-modal-close>Fermer</button></div>`);
+}
+
+function openAdminAttendance(matchId) {
+  if (!isAdmin()) return;
+  const match = state.matches.find(m => m.id === matchId) || (state.currentMatch?.id===matchId ? state.currentMatch : null);
+  if (!match) return;
+  const group = (title, type) => {
+    const players = activePlayers().filter(p => p.type === type);
+    if (!players.length) return '';
+    return `<section class="admin-attendance-group"><h3 class="group-heading">${esc(title)}</h3>${players.map(p => {
+      const status = getMatchResponseStatus(match,p.id);
+      const sub = p.type==='sub';
+      return `<div class="admin-attendance-row">
+        <div class="admin-attendance-person"><strong>${esc(playerName(p))}</strong><span>${sub?'Remplaçant':type==='goalie'?'Gardien':'Joueur régulier'}</span></div>
+        <div class="admin-attendance-buttons" role="group" aria-label="Présence de ${escAttr(playerName(p))}">
+          <button type="button" class="${status==='yes'?'active yes':''}" data-action="admin-set-attendance" data-match="${match.id}" data-player="${p.id}" data-status="yes">${sub?'Dispo':'Présent'}</button>
+          <button type="button" class="${status==='maybe'?'active maybe':''}" data-action="admin-set-attendance" data-match="${match.id}" data-player="${p.id}" data-status="maybe">Incertain</button>
+          <button type="button" class="${status==='no'?'active no':''}" data-action="admin-set-attendance" data-match="${match.id}" data-player="${p.id}" data-status="no">${sub?'Indispo':'Absent'}</button>
+          <button type="button" class="admin-attendance-clear ${status==='unknown'?'active':''}" data-action="admin-set-attendance" data-match="${match.id}" data-player="${p.id}" data-status="unknown" title="Remettre sans réponse">—</button>
+        </div>
+      </div>`;
+    }).join('')}</section>`;
+  };
+  openModal(`<div class="admin-attendance-modal">
+    <div class="archive-kicker">ADMIN · PRÉSENCES</div>
+    <h2>Gérer les présences</h2>
+    <div class="muted">${formatDate(match.startAt)} · ${formatTime(match.startAt)}${match.location?' · '+esc(match.location):''}</div>
+    <p class="admin-attendance-help">Tu peux répondre au nom d’un joueur. Le bouton « — » remet sa réponse à <strong>Sans réponse</strong>.</p>
+    ${group('Joueurs réguliers','regular')}
+    ${group('Gardiens','goalie')}
+    ${group('Remplaçants','sub')}
+    <div class="modal-actions"><button type="button" class="btn primary wide" data-modal-close>Terminé</button></div>
+  </div>`);
 }
 
 function renderCalendarResponseButtons(match, player, status) {
@@ -1030,6 +1094,8 @@ root.addEventListener('click', async e => {
     else if (action==='respond') await setResponse(el.dataset.player,el.dataset.status);
     else if (action==='respond-match') await setResponseForMatch(el.dataset.match,el.dataset.player,el.dataset.status);
     else if (action==='calendar-attendance') openCalendarAttendance(el.dataset.match,el.dataset.status);
+    else if (action==='admin-attendance') openAdminAttendance(el.dataset.match);
+    else if (action==='jump-live-match') { selectMatch(el.dataset.match); state.tab='match'; render(); }
     else if (action==='calendar-match') { selectMatch(el.dataset.match); state.tab='calendar'; render(); }
     else if (action==='open-history-match') { selectMatch(el.dataset.match); state.tab='match'; render(); }
     else if (action==='archive-match-tab') { state.archiveMatchTab=el.dataset.view==='lineups'?'lineups':'summary'; render(); }
@@ -1065,8 +1131,18 @@ root.addEventListener('submit', async e => {
   } catch (err) { handleError(err); }
 });
 
-modal.addEventListener('click', e => {
-  if (e.target === modal || e.target.closest('[data-modal-close]')) modal.close();
+modal.addEventListener('click', async e => {
+  if (e.target === modal || e.target.closest('[data-modal-close]')) { modal.close(); return; }
+  const el = e.target.closest('[data-action]');
+  if (!el) return;
+  try {
+    if (el.dataset.action==='admin-set-attendance') {
+      const matchId=el.dataset.match, playerId=el.dataset.player, status=el.dataset.status;
+      if(status==='unknown') await clearResponseForMatch(matchId,playerId);
+      else await setResponseForMatch(matchId,playerId,status);
+      openAdminAttendance(matchId);
+    }
+  } catch (err) { handleError(err); }
 });
 modal.addEventListener('submit', async e => {
   const form=e.target.closest('form[data-modal-form]'); if(!form)return;
@@ -1447,7 +1523,25 @@ async function setResponseForMatch(matchId,playerId,status) {
   batch.set(responseRef,{playerId,status,updatedBy:state.user.uid,updatedAt:serverTimestamp()},{merge:true});
   batch.update(matchDocRef,{[`attendance.${playerId}`]:status});
   await batch.commit();
+  const listMatch=state.matches.find(m=>m.id===matchId);
+  if(listMatch) listMatch.attendance={...(listMatch.attendance||{}),[playerId]:status};
+  if(state.currentMatch?.id===matchId) state.currentMatch.attendance={...(state.currentMatch.attendance||{}),[playerId]:status};
   toast(status==='yes'?'Présence confirmée.':status==='no'?'Absence enregistrée.':'Réponse mise à incertain.');
+}
+
+async function clearResponseForMatch(matchId,playerId) {
+  if(!isAdmin()) throw new Error('Réservé aux administrateurs.');
+  const responseRef=doc(state.db,'leagues',state.leagueId,'matches',matchId,'responses',playerId);
+  const matchDocRef=doc(state.db,'leagues',state.leagueId,'matches',matchId);
+  const batch=writeBatch(state.db);
+  batch.delete(responseRef);
+  batch.update(matchDocRef,{[`attendance.${playerId}`]:deleteField()});
+  await batch.commit();
+  const listMatch=state.matches.find(m=>m.id===matchId);
+  if(listMatch?.attendance) delete listMatch.attendance[playerId];
+  if(state.currentMatch?.id===matchId && state.currentMatch.attendance) delete state.currentMatch.attendance[playerId];
+  if(state.currentMatch?.id===matchId) state.responses.delete(playerId);
+  toast('Réponse remise à sans réponse.');
 }
 
 async function setMemberRole(uid, role) {
@@ -1541,7 +1635,7 @@ async function exportLeagueJson() {
   downloadBlob(`cosom-${new Date().toISOString().slice(0,10)}.json`,JSON.stringify(data,null,2),'application/json');
 }
 
-function openModal(body) { modal.innerHTML=`<div class="modal-inner"><div class="modal-head"><strong>COSOM</strong><button type="button" class="btn small ghost" data-modal-close>✕</button></div><div class="modal-body">${body}</div></div>`; modal.showModal(); }
+function openModal(body) { modal.innerHTML=`<div class="modal-inner"><div class="modal-head"><strong>COSOM</strong><button type="button" class="btn small ghost" data-modal-close>✕</button></div><div class="modal-body">${body}</div></div>`; if(!modal.open) modal.showModal(); }
 
 // ---------- Clock + alarm ----------
 function updateClockDisplay() {

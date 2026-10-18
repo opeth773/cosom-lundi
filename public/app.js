@@ -9,7 +9,7 @@ import {
   writeBatch, serverTimestamp, Timestamp, onSnapshot, query, orderBy, where, runTransaction, arrayUnion, arrayRemove, deleteField
 } from 'https://www.gstatic.com/firebasejs/12.19.0/firebase-firestore.js';
 
-const APP_VERSION = '8.10.0';
+const APP_VERSION = '8.12.0';
 const root = document.getElementById('app');
 const modal = document.getElementById('modal');
 const toastEl = document.getElementById('toast');
@@ -57,6 +57,39 @@ let toastTimer = null;
 let clockTimer = null;
 let audioCtx = null;
 let wakeLock = null;
+
+// Voice scoring mode ---------------------------------------------------------
+// Uses the browser speech-recognition service in Canadian French.
+const SpeechRecognitionCtor = window.SpeechRecognition || window.webkitSpeechRecognition || null;
+const voice = {
+  enabled: false,
+  running: false,
+  recognition: null,
+  matchId: null,
+  phase: 'idle',
+  captured: null,
+  detailTimer: null,
+  restartTimer: null,
+  status: 'Mode vocal inactif.',
+  statusKind: 'idle',
+  lastTranscript: ''
+};
+
+// Admin-only voice lab -------------------------------------------------------
+// Completely isolated from matches and Firestore. It only tests recognition
+// against the current player directory and keeps results in memory.
+const voiceTest = {
+  enabled: false,
+  running: false,
+  recognition: null,
+  phase: 'idle',
+  detailTimer: null,
+  restartTimer: null,
+  status: 'Laboratoire vocal inactif.',
+  statusKind: 'idle',
+  lastTranscript: '',
+  results: []
+};
 
 boot();
 
@@ -190,6 +223,8 @@ async function handleAuthChange(user) {
 }
 
 function clearSubscriptions() {
+  if (voice.enabled) stopVoiceMode('Mode vocal désactivé.', false);
+  if (voiceTest.enabled) stopVoiceTest('Laboratoire vocal désactivé.', false);
   [...state.leagueUnsubs, ...state.matchUnsubs, ...state.adminUnsubs].forEach(fn => { try { fn(); } catch {} });
   if (state.accessWaitUnsub) { try { state.accessWaitUnsub(); } catch {} }
   state.leagueUnsubs = [];
@@ -288,6 +323,9 @@ function chooseDefaultMatch() {
 }
 
 function selectMatch(matchId) {
+  if (voice.enabled && voice.matchId && voice.matchId !== matchId) {
+    stopVoiceMode('Mode vocal désactivé : autre match sélectionné.', false);
+  }
   clearMatchSubscriptions();
   state.selectedMatchId = matchId;
   state.currentMatch = null;
@@ -300,6 +338,9 @@ function selectMatch(matchId) {
   state.matchUnsubs.push(onSnapshot(doc(state.db, ...base), snap => {
     state.currentMatch = snap.exists() ? {id:snap.id, ...snap.data()} : null;
     if (state.currentMatch?.clock?.running && getRemainingSeconds(state.currentMatch) > 0) state.clockZeroHandled = false;
+    if (voice.enabled && state.currentMatch?.id === voice.matchId && state.currentMatch?.status === 'final') {
+      stopVoiceMode('Partie terminée — mode vocal désactivé.', false);
+    }
     render();
   }, handleError));
   state.matchUnsubs.push(onSnapshot(collection(state.db, ...base, 'assignments'), snap => {
@@ -427,6 +468,7 @@ function renderMatch() {
       <button class="btn goalbtn" data-action="new-goal" data-team="dark"><strong>+ But Foncés</strong></button>
       <button class="btn goalbtn" data-action="new-goal" data-team="light"><strong>+ But Pâles</strong></button>
     </div>
+    ${renderVoiceScoring(current)}
     <div class="card">
       <div class="row between"><h3 class="card-heading compact">Alignements</h3>${canClear?'<button class="btn small ghost" data-action="clear-teams">Vider les équipes</button>':''}</div>
       ${renderAssignmentGroup('Joueurs','skater')}
@@ -981,6 +1023,7 @@ function renderSettings() {
           ${!owner && !me ? `<button class="btn small ${m.role==='admin'?'warn':'primary'}" data-action="set-member-role" data-member="${m.id}" data-role="${m.role==='admin'?'member':'admin'}">${m.role==='admin'?'Remettre normal':'Nommer admin'}</button>`:''}</div></div>`;
       }).join(''):'<div class="empty">Aucun compte.</div>'}
     </div>
+    ${renderVoiceTestLab()}
     <div class="card"><h3 class="card-heading">Configuration des matchs</h3><form data-form="league-settings"><label>Nombre de périodes</label><input name="periodCount" type="number" min="1" max="9" value="${state.league.settings?.periodCount||3}" required><label>Durée d’une période (minutes)</label><input name="periodMinutes" type="number" min="1" max="120" value="${state.league.settings?.periodMinutes||20}" required><label>Heure habituelle du lundi</label><input name="gameTime" type="time" value="${escAttr(state.league.settings?.gameTime||'20:00')}" required><label>Nombre de semaines créées d’avance</label><input name="scheduleWeeks" type="number" min="8" max="52" value="${state.league.settings?.scheduleWeeks||44}" required><p class="muted">Le calendrier crée automatiquement les lundis futurs. Dans Calendrier, un admin peut aussi ajouter un match manuel ou supprimer un lundi; un lundi supprimé ne sera pas recréé automatiquement.</p><button class="btn primary wide" style="margin-top:12px">Enregistrer</button></form></div>
     <div class="card"><h3 class="card-heading">Données</h3><button class="btn wide" data-action="export-json">Exporter la ligue en JSON</button><p class="muted">Copie locale des joueurs, matchs, alignements, réponses et buts.</p></div>`:''}
     <div class="card"><h3 class="card-heading">Mon compte</h3><div class="row between"><div><strong>${esc(userDisplayName())}</strong><br><span class="muted">${esc(state.user.email||'')}</span></div><span class="role-badge ${admin?'admin':'member'}">${admin?'Administrateur':'Compte normal'}</span></div><p class="muted" style="margin-top:12px">${linked?`Associé à ${esc(playerName(linked))}.`:'Aucun joueur associé à ce compte.'}</p><p class="muted">Cosom v${APP_VERSION}</p><button class="btn" data-action="logout">Déconnexion</button></div>`;
@@ -1115,7 +1158,12 @@ async function loadStats() {
 // ---------- Events ----------
 root.addEventListener('click', async e => {
   const tab = e.target.closest('[data-tab]')?.dataset.tab;
-  if (tab) { state.tab=tab; render(); return; }
+  if (tab) {
+    if (voiceTest.enabled && tab !== 'settings') stopVoiceTest('Laboratoire vocal désactivé.', false);
+    state.tab=tab;
+    render();
+    return;
+  }
   const playerTab = e.target.closest('[data-player-tab]')?.dataset.playerTab;
   if (playerTab) { state.playerTab=playerTab; render(); return; }
   const subPlayerTab = e.target.closest('[data-sub-player-tab]')?.dataset.subPlayerTab;
@@ -1139,6 +1187,9 @@ root.addEventListener('click', async e => {
     else if (action==='assign') await setAssignment(el.dataset.player,el.dataset.team);
     else if (action==='match-position') await setMatchPosition(el.dataset.player,el.dataset.position);
     else if (action==='new-goal') openGoalEditor(el.dataset.team);
+    else if (action==='toggle-voice') await toggleVoiceMode();
+    else if (action==='toggle-voice-test') await toggleVoiceTest();
+    else if (action==='clear-voice-test') { voiceTest.results=[]; voiceTest.lastTranscript=''; render(); }
     else if (action==='edit-goal') { const g=state.goals.find(x=>x.id===el.dataset.goal); if(g) openGoalEditor(g.team,g); }
     else if (action==='toggle-clock') await toggleClock();
     else if (action==='reset-clock') await resetClock();
@@ -1546,6 +1597,7 @@ async function finalizeMatch() {
   state.currentMatch=localFinal;
   state.matches=state.matches.map(m=>m.id===localFinal.id?{...m,...localFinal}:m);
   state.stats=null;
+  if (voice.enabled) stopVoiceMode('Partie terminée — mode vocal désactivé.', false);
   toast('Match terminé.');
 }
 
@@ -1703,6 +1755,911 @@ async function exportLeagueJson() {
 }
 
 function openModal(body) { modal.innerHTML=`<div class="modal-inner"><div class="modal-head"><strong>COSOM</strong><button type="button" class="btn small ghost" data-modal-close>✕</button></div><div class="modal-body">${body}</div></div>`; if(!modal.open) modal.showModal(); }
+
+// ---------- Voice scoring ----------
+function renderVoiceScoring(current) {
+  const supported = !!SpeechRecognitionCtor;
+  const live = current?.status === 'live';
+  const active = voice.enabled && voice.matchId === current?.id;
+  const status = active ? voice.status : (
+    !supported
+      ? 'Reconnaissance vocale non disponible dans ce navigateur.'
+      : live
+        ? 'Prêt. Active le micro puis dis « Ajouter un but ».'
+        : 'Le mode vocal devient disponible dès que la partie est démarrée.'
+  );
+  const kind = active ? voice.statusKind : (!supported ? 'error' : 'idle');
+  const buttonLabel = active ? 'Désactiver le micro' : 'Activer le mode vocal';
+  const disabled = !supported || !live;
+
+  return `
+    <section class="card voice-card ${active?'is-active':''}">
+      <div class="voice-card-head">
+        <div class="grow">
+          <div class="voice-kicker">TABLE DE MARQUE VOCALE</div>
+          <h3 class="voice-title">Ajouter les buts à la voix</h3>
+          <p class="voice-help">Dis <strong>« Ajouter un but »</strong>, attends le bip, puis par exemple <strong>« Jonathan, assisté de Marc et Alex »</strong>.</p>
+        </div>
+        <button type="button" class="btn ${active?'danger':'primary'} voice-toggle" data-action="toggle-voice" ${disabled?'disabled':''}>${buttonLabel}</button>
+      </div>
+      <div id="voiceStatus" class="voice-status ${escAttr(kind)}" aria-live="polite">
+        <span class="voice-status-dot" aria-hidden="true"></span>
+        <span>${esc(status)}</span>
+      </div>
+      ${active && voice.lastTranscript ? `<div class="voice-heard">Entendu : « ${esc(voice.lastTranscript)} »</div>` : ''}
+      <div class="voice-note">Le temps du but est capturé dès que « Ajouter un but » est détecté. Seuls les joueurs dans l’alignement de cette partie peuvent être reconnus.</div>
+    </section>
+  `;
+}
+
+async function toggleVoiceMode() {
+  if (voice.enabled) {
+    stopVoiceMode('Mode vocal désactivé.');
+    return;
+  }
+  await startVoiceMode();
+}
+
+async function startVoiceMode() {
+  if (voiceTest.enabled) stopVoiceTest('Laboratoire vocal désactivé pendant une vraie partie.', false);
+  if (!SpeechRecognitionCtor) throw new Error('La reconnaissance vocale n’est pas disponible dans ce navigateur.');
+  if (!state.currentMatch || state.currentMatch.status !== 'live') throw new Error('Démarre d’abord la partie pour activer le mode vocal.');
+
+  const lineup = voiceLineupPlayers();
+  if (!lineup.length) throw new Error('Ajoute d’abord les joueurs aux équipes.');
+
+  await unlockAudio();
+  await requestWakeLock();
+
+  voice.enabled = true;
+  voice.matchId = state.currentMatch.id;
+  voice.phase = 'idle';
+  voice.captured = null;
+  voice.lastTranscript = '';
+  setVoiceStatus('Micro actif — dis « Ajouter un but ».', 'listening');
+
+  if (!voice.recognition) {
+    const recognition = new SpeechRecognitionCtor();
+    recognition.lang = 'fr-CA';
+    recognition.continuous = true;
+    recognition.interimResults = true;
+    recognition.maxAlternatives = 3;
+
+    recognition.onstart = () => {
+      voice.running = true;
+      if (voice.enabled) setVoiceStatus(
+        voice.phase === 'details'
+          ? 'Je t’écoute : dis le buteur puis les aides.'
+          : 'Micro actif — dis « Ajouter un but ».',
+        voice.phase === 'details' ? 'waiting' : 'listening'
+      );
+    };
+
+    recognition.onresult = event => {
+      handleVoiceRecognitionResult(event).catch(handleVoiceFailure);
+    };
+
+    recognition.onerror = event => {
+      const code = String(event?.error || '');
+      voice.running = false;
+      if (code === 'not-allowed' || code === 'service-not-allowed') {
+        stopVoiceMode('Permission micro refusée. Autorise le micro puis réessaie.', false);
+        render();
+        return;
+      }
+      if (code === 'audio-capture') {
+        stopVoiceMode('Aucun microphone disponible.', false);
+        render();
+        return;
+      }
+      if (code === 'no-speech' || code === 'aborted') return;
+      setVoiceStatus(`Reconnaissance vocale : ${code || 'erreur inconnue'}. Nouvelle tentative…`, 'error');
+    };
+
+    recognition.onend = () => {
+      voice.running = false;
+      if (!voice.enabled) return;
+      clearTimeout(voice.restartTimer);
+      voice.restartTimer = setTimeout(() => {
+        if (voice.enabled) startVoiceRecognition();
+      }, 350);
+    };
+
+    voice.recognition = recognition;
+  }
+
+  startVoiceRecognition();
+  render();
+}
+
+function startVoiceRecognition() {
+  if (!voice.enabled || !voice.recognition || voice.running) return;
+  try {
+    voice.recognition.start();
+  } catch (err) {
+    if (err?.name !== 'InvalidStateError') {
+      setVoiceStatus('Impossible de redémarrer le micro. Je réessaie…', 'error');
+    }
+  }
+}
+
+function stopVoiceMode(message='Mode vocal désactivé.', rerender=true) {
+  voice.enabled = false;
+  voice.matchId = null;
+  voice.phase = 'idle';
+  voice.captured = null;
+  voice.lastTranscript = '';
+  voice.status = message;
+  voice.statusKind = 'idle';
+  clearTimeout(voice.detailTimer);
+  clearTimeout(voice.restartTimer);
+  voice.detailTimer = null;
+  voice.restartTimer = null;
+
+  if (voice.recognition) {
+    try { voice.recognition.abort(); } catch {}
+  }
+  voice.running = false;
+  if (rerender) render();
+}
+
+async function handleVoiceRecognitionResult(event) {
+  if (!voice.enabled || !state.currentMatch || state.currentMatch.id !== voice.matchId) return;
+
+  for (let i = event.resultIndex; i < event.results.length; i++) {
+    const result = event.results[i];
+    const alternatives = [];
+    for (let j = 0; j < result.length; j++) {
+      if (result[j]?.transcript) alternatives.push(String(result[j].transcript).trim());
+    }
+    if (!alternatives.length) continue;
+
+    const primary = alternatives[0];
+    voice.lastTranscript = primary;
+    updateVoiceHeard(primary);
+
+    if (voice.phase === 'idle') {
+      const triggered = alternatives
+        .map(t => ({raw:t, normalized:normalizeSpeechText(t), hit:findVoiceTrigger(normalizeSpeechText(t))}))
+        .find(x => x.hit);
+
+      if (triggered) {
+        captureVoiceGoalMoment();
+        const remainder = triggered.normalized.slice(triggered.hit.end).trim();
+
+        if (result.isFinal && remainder) {
+          await processVoiceGoalDetails(remainder);
+        }
+        continue;
+      }
+    }
+
+    if (voice.phase === 'details' && result.isFinal) {
+      let detailOptions = alternatives.map(normalizeSpeechText).filter(Boolean);
+      detailOptions = detailOptions.map(text => {
+        const hit = findVoiceTrigger(text);
+        return hit ? text.slice(hit.end).trim() : text;
+      }).filter(Boolean);
+
+      if (detailOptions.length) await processVoiceGoalAlternatives(detailOptions);
+    }
+  }
+}
+
+function findVoiceTrigger(text) {
+  const match = String(text || '').match(/\b(ajouter|ajoute|ajoutez)\s+un\s+but\b/);
+  if (!match) return null;
+  return {start:match.index, end:match.index + match[0].length};
+}
+
+function captureVoiceGoalMoment() {
+  if (!state.currentMatch || state.currentMatch.id !== voice.matchId) return;
+
+  const periodSeconds = Number(state.currentMatch.periodSeconds || state.league?.settings?.periodMinutes * 60 || 1200);
+  const remaining = Math.max(0, Math.min(periodSeconds, getRemainingSeconds(state.currentMatch)));
+
+  voice.phase = 'details';
+  voice.captured = {
+    matchId: state.currentMatch.id,
+    period: Number(state.currentMatch.period || 1),
+    periodSeconds,
+    clockRemainingSeconds: remaining,
+    capturedAt: Date.now()
+  };
+  voice.lastTranscript = '';
+  setVoiceStatus(`But détecté à ${formatClock(remaining)} — dis le buteur et les aides.`, 'waiting');
+  voiceBeep('trigger');
+
+  clearTimeout(voice.detailTimer);
+  voice.detailTimer = setTimeout(() => {
+    if (!voice.enabled || voice.phase !== 'details') return;
+    resetVoiceToListening('Je n’ai rien entendu. Redis « Ajouter un but ».', 'error');
+    voiceBeep('error');
+  }, 10000);
+}
+
+async function processVoiceGoalAlternatives(options) {
+  if (!voice.enabled || voice.phase !== 'details') return;
+
+  const parses = options
+    .map(text => ({text, parsed:parseVoiceGoalDetails(text)}))
+    .filter(x => x.parsed?.ok)
+    .sort((a,b) => b.parsed.confidence - a.parsed.confidence);
+
+  if (!parses.length) {
+    const first = options[0] || '';
+    const fallback = parseVoiceGoalDetails(first);
+    voice.lastTranscript = first;
+    updateVoiceHeard(first);
+    setVoiceStatus(fallback?.message || 'Je n’ai pas reconnu le buteur. Répète le nom et les aides.', 'error');
+    voiceBeep('error');
+    restartVoiceDetailTimeout();
+    return;
+  }
+
+  voice.lastTranscript = parses[0].text;
+  updateVoiceHeard(parses[0].text);
+  await commitVoiceGoal(parses[0].parsed);
+}
+
+async function processVoiceGoalDetails(text) {
+  return processVoiceGoalAlternatives([text]);
+}
+
+function parseVoiceGoalDetails(text) {
+  const normalized = normalizeSpeechText(text);
+  if (!normalized) return {ok:false, message:'Je n’ai rien entendu après la commande.'};
+
+  if (/\b(annule|annuler|cancel)\b/.test(normalized)) {
+    resetVoiceToListening('But annulé avant l’enregistrement. Redis « Ajouter un but ».');
+    voiceBeep('error');
+    return {ok:false, cancelled:true, message:'Commande annulée.'};
+  }
+
+  const lineup = voiceLineupPlayers();
+  if (!lineup.length) return {ok:false, message:'Aucun joueur n’est dans l’alignement.'};
+
+  const mentions = findVoicePlayerMentions(normalized, lineup);
+  if (!mentions.length) {
+    return {ok:false, message:'Je n’ai reconnu aucun joueur de l’alignement. Répète le nom du buteur.'};
+  }
+
+  const scorer = mentions[0].player;
+  const scorerAssignment = state.assignments.get(scorer.id);
+  const team = scorerAssignment?.team;
+  if (!['dark','light'].includes(team)) {
+    return {ok:false, message:`${playerName(scorer)} n’est pas assigné à une équipe.`};
+  }
+
+  const noAssist = /\b(sans\s+(aide|aides|passe|passes)|aucune?\s+(aide|passe))\b/.test(normalized);
+  const assistMentions = noAssist ? [] : mentions.slice(1);
+
+  if (assistMentions.length > 2) {
+    return {ok:false, message:'J’ai entendu plus de deux aides. Répète avec maximum deux aides.'};
+  }
+
+  const assists = [];
+  for (const mention of assistMentions) {
+    if (mention.player.id === scorer.id) continue;
+    const assignment = state.assignments.get(mention.player.id);
+    if (assignment?.team !== team) {
+      return {ok:false, message:`${playerName(mention.player)} n’est pas dans la même équipe que ${playerName(scorer)}.`};
+    }
+    if (!assists.includes(mention.player.id)) assists.push(mention.player.id);
+  }
+
+  const confidence = mentions.slice(0, 1 + assists.length).reduce((sum,m)=>sum+m.score,0) / Math.max(1,1+assists.length);
+  return {ok:true, scorer, scorerId:scorer.id, team, assists, confidence};
+}
+
+function voiceLineupPlayers() {
+  return activePlayers().filter(p => {
+    const assignment = state.assignments.get(p.id);
+    return assignment && (assignment.team === 'dark' || assignment.team === 'light');
+  });
+}
+
+function findVoicePlayerMentions(text, players) {
+  const normalized = normalizeSpeechText(text);
+  const ignoredWords = new Set(['assiste','assistee','assister','aide','aides','passe','passes','avec','sans','et','pis','par','pour','aucun','aucune']);
+  const tokens = normalized.split(' ').filter(Boolean).filter(token => !ignoredWords.has(token));
+  if (!tokens.length) return [];
+
+  const firstCounts = new Map();
+  const lastCounts = new Map();
+  for (const p of players) {
+    const first = normalizeSpeechText(p.firstName || '');
+    const last = normalizeSpeechText(p.lastName || '');
+    if (first) firstCounts.set(first, (firstCounts.get(first) || 0) + 1);
+    if (last) lastCounts.set(last, (lastCounts.get(last) || 0) + 1);
+  }
+
+  const candidates = [];
+  for (const player of players) {
+    const first = normalizeSpeechText(player.firstName || '');
+    const last = normalizeSpeechText(player.lastName || '');
+    const full = normalizeSpeechText(playerName(player));
+    const aliases = [];
+
+    if (full) aliases.push({text:full, weight:0.08});
+    if (first && first.length >= 3 && firstCounts.get(first) === 1) aliases.push({text:first, weight:0});
+    if (last && last.length >= 3 && lastCounts.get(last) === 1) aliases.push({text:last, weight:0});
+
+    let best = null;
+    for (const alias of aliases) {
+      const match = bestVoiceAliasMatch(tokens, alias.text);
+      if (!match) continue;
+      const weighted = Math.min(1, match.score + alias.weight);
+      if (!best || weighted > best.score) best = {...match, score:weighted, alias:alias.text};
+    }
+
+    if (best && best.score >= 0.72) candidates.push({player, ...best});
+  }
+
+  candidates.sort((a,b) => b.score - a.score || a.start - b.start);
+  const used = new Set();
+  const selected = [];
+  for (const c of candidates) {
+    const positions = [];
+    for (let i=c.start; i<c.end; i++) positions.push(i);
+    if (positions.some(i=>used.has(i))) continue;
+    positions.forEach(i=>used.add(i));
+    selected.push(c);
+  }
+
+  return selected.sort((a,b)=>a.start-b.start || b.score-a.score);
+}
+
+function bestVoiceAliasMatch(tokens, alias) {
+  const aliasTokens = alias.split(' ').filter(Boolean);
+  if (!aliasTokens.length) return null;
+
+  let best = null;
+  const sizes = new Set([aliasTokens.length]);
+  if (aliasTokens.length === 2) {
+    sizes.add(1);
+    sizes.add(3);
+  }
+
+  for (const size of sizes) {
+    if (size < 1 || size > tokens.length) continue;
+    for (let i=0; i<=tokens.length-size; i++) {
+      const spoken = tokens.slice(i,i+size).join(' ');
+      const score = speechSimilarity(spoken, alias);
+      if (!best || score > best.score) best = {start:i,end:i+size,score};
+    }
+  }
+  return best;
+}
+
+function speechSimilarity(a,b) {
+  if (!a || !b) return 0;
+  if (a === b) return 1;
+  const max = Math.max(a.length,b.length);
+  if (!max) return 1;
+  return Math.max(0, 1 - levenshteinDistance(a,b) / max);
+}
+
+function levenshteinDistance(a,b) {
+  const prev = Array.from({length:b.length+1},(_,i)=>i);
+  for (let i=1; i<=a.length; i++) {
+    let diagonal = prev[0];
+    prev[0] = i;
+    for (let j=1; j<=b.length; j++) {
+      const saved = prev[j];
+      const cost = a[i-1] === b[j-1] ? 0 : 1;
+      prev[j] = Math.min(prev[j]+1, prev[j-1]+1, diagonal+cost);
+      diagonal = saved;
+    }
+  }
+  return prev[b.length];
+}
+
+function normalizeSpeechText(value) {
+  return String(value || '')
+    .toLocaleLowerCase('fr-CA')
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g,'')
+    .replace(/[’']/g,' ')
+    .replace(/[-–—]/g,' ')
+    .replace(/[^a-z0-9 ]/g,' ')
+    .replace(/\s+/g,' ')
+    .trim();
+}
+
+async function commitVoiceGoal(parsed) {
+  const captured = voice.captured;
+  if (!captured || !state.currentMatch || captured.matchId !== state.currentMatch.id) {
+    resetVoiceToListening('Le match a changé. Redis « Ajouter un but ».', 'error');
+    return;
+  }
+
+  voice.phase = 'saving';
+  clearTimeout(voice.detailTimer);
+  setVoiceStatus('Enregistrement du but…', 'waiting');
+
+  const data = {
+    team: parsed.team,
+    scorerId: parsed.scorerId,
+    assists: parsed.assists.slice(0,2),
+    period: Number(captured.period || 1),
+    clockRemainingSeconds: Number(captured.clockRemainingSeconds),
+    elapsedSeconds: Math.max(0, Number(captured.periodSeconds) - Number(captured.clockRemainingSeconds)),
+    updatedAt: serverTimestamp(),
+    updatedBy: state.user.uid,
+    createdAt: serverTimestamp(),
+    entryMethod: 'voice'
+  };
+
+  try {
+    await addDoc(collection(state.db,'leagues',state.leagueId,'matches',captured.matchId,'goals'), data);
+    state.stats = null;
+
+    const assistNames = parsed.assists.map(id=>playerName(findPlayer(id))).filter(Boolean);
+    const teamLabel = parsed.team === 'dark' ? 'Foncés' : 'Pâles';
+    const assistLabel = assistNames.length ? ` · aides ${assistNames.join(' et ')}` : ' · sans aide';
+    const message = `But ${playerName(parsed.scorer)}${assistLabel} · ${teamLabel} · ${formatClock(captured.clockRemainingSeconds)}`;
+
+    setVoiceStatus(message, 'success');
+    voiceBeep('success');
+    voice.phase = 'idle';
+    voice.captured = null;
+
+    setTimeout(() => {
+      if (voice.enabled && voice.phase === 'idle') {
+        setVoiceStatus('Micro actif — dis « Ajouter un but ».', 'listening');
+        voice.lastTranscript = '';
+        updateVoiceHeard('');
+      }
+    }, 4500);
+  } catch (err) {
+    console.error(err);
+    voice.phase = 'details';
+    setVoiceStatus('Impossible d’enregistrer le but. Répète les détails ou utilise le bouton + But.', 'error');
+    voiceBeep('error');
+    restartVoiceDetailTimeout();
+  }
+}
+
+function restartVoiceDetailTimeout() {
+  clearTimeout(voice.detailTimer);
+  voice.detailTimer = setTimeout(() => {
+    if (!voice.enabled || voice.phase !== 'details') return;
+    resetVoiceToListening('Délai dépassé. Redis « Ajouter un but ».', 'error');
+    voiceBeep('error');
+  }, 10000);
+}
+
+function resetVoiceToListening(message='Micro actif — dis « Ajouter un but ».', kind='listening') {
+  voice.phase = 'idle';
+  voice.captured = null;
+  clearTimeout(voice.detailTimer);
+  voice.detailTimer = null;
+  setVoiceStatus(message, kind);
+}
+
+function setVoiceStatus(message, kind='idle') {
+  voice.status = message;
+  voice.statusKind = kind;
+  const el = document.getElementById('voiceStatus');
+  if (el) {
+    el.className = `voice-status ${kind}`;
+    const span = el.querySelector('span:last-child');
+    if (span) span.textContent = message;
+  }
+}
+
+function updateVoiceHeard(text) {
+  const card = document.querySelector('.voice-card');
+  if (!card) return;
+  let el = card.querySelector('.voice-heard');
+  if (!text) {
+    if (el) el.remove();
+    return;
+  }
+  if (!el) {
+    el = document.createElement('div');
+    el.className = 'voice-heard';
+    const note = card.querySelector('.voice-note');
+    card.insertBefore(el, note || null);
+  }
+  el.textContent = `Entendu : « ${text} »`;
+}
+
+function handleVoiceFailure(err) {
+  console.error(err);
+  if (!voice.enabled) return;
+  setVoiceStatus(err?.message || 'Erreur du mode vocal.', 'error');
+  voiceBeep('error');
+  if (voice.phase === 'details') restartVoiceDetailTimeout();
+}
+
+async function voiceBeep(kind='trigger') {
+  await unlockAudio();
+  if (!audioCtx) return;
+  const now = audioCtx.currentTime + 0.01;
+  const pattern = kind === 'success'
+    ? [{f:880,t:0,d:.10},{f:1040,t:.16,d:.12}]
+    : kind === 'error'
+      ? [{f:260,t:0,d:.20}]
+      : [{f:700,t:0,d:.11}];
+
+  for (const item of pattern) {
+    const o = audioCtx.createOscillator();
+    const g = audioCtx.createGain();
+    o.frequency.value = item.f;
+    g.gain.setValueAtTime(.0001, now + item.t);
+    g.gain.exponentialRampToValueAtTime(.16, now + item.t + .01);
+    g.gain.exponentialRampToValueAtTime(.0001, now + item.t + item.d);
+    o.connect(g).connect(audioCtx.destination);
+    o.start(now + item.t);
+    o.stop(now + item.t + item.d + .02);
+  }
+}
+
+
+// ---------- Admin voice recognition lab ----------
+function renderVoiceTestLab() {
+  if (!isAdmin()) return '';
+
+  const supported = !!SpeechRecognitionCtor;
+  const active = voiceTest.enabled;
+  const players = activePlayers();
+  const status = active
+    ? voiceTest.status
+    : supported
+      ? 'Prêt à tester. Rien ne sera écrit dans Firebase.'
+      : 'Reconnaissance vocale non disponible dans ce navigateur.';
+  const kind = active ? voiceTest.statusKind : (!supported ? 'error' : 'idle');
+
+  const results = voiceTest.results.length
+    ? `<div class="voice-test-results">
+        ${voiceTest.results.slice(0,6).map(item => `
+          <div class="voice-test-result ${item.ok?'ok':'bad'}">
+            <div class="voice-test-result-head">
+              <strong>${item.ok?'Reconnu':'Non reconnu'}</strong>
+              ${item.confidence != null ? `<span>${Math.round(item.confidence*100)}%</span>` : ''}
+            </div>
+            <div class="voice-test-transcript">« ${esc(item.transcript || '')} »</div>
+            <div class="voice-test-summary">${esc(item.summary || '')}</div>
+          </div>`).join('')}
+      </div>`
+    : '<div class="voice-test-empty">Aucun essai pour l’instant.</div>';
+
+  return `
+    <section class="card voice-test-card ${active?'is-active':''}">
+      <div class="voice-test-head">
+        <div class="grow">
+          <div class="voice-kicker">OUTIL ADMIN · TEST SEULEMENT</div>
+          <h3 class="voice-title">Laboratoire de reconnaissance vocale</h3>
+          <p class="voice-help">Teste exactement le même déclencheur et la même reconnaissance de noms que pendant une partie, sans créer de but et sans modifier aucune game.</p>
+        </div>
+        <button type="button" class="btn ${active?'danger':'primary'} voice-toggle" data-action="toggle-voice-test" ${supported?'':'disabled'}>${active?'Arrêter le test':'Activer le test'}</button>
+      </div>
+
+      <div class="voice-test-safety">
+        <strong>Zéro écriture Firebase.</strong>
+        Tout reste temporairement sur cet appareil et disparaît au rechargement.
+      </div>
+
+      <div id="voiceTestStatus" class="voice-status ${escAttr(kind)}" aria-live="polite">
+        <span class="voice-status-dot" aria-hidden="true"></span>
+        <span>${esc(status)}</span>
+      </div>
+      ${active && voiceTest.lastTranscript ? `<div class="voice-heard voice-test-heard">Entendu : « ${esc(voiceTest.lastTranscript)} »</div>` : ''}
+
+      <div class="voice-test-instructions">
+        <div><span>1</span><p>Dis <strong>« Ajouter un but »</strong>.</p></div>
+        <div><span>2</span><p>Après le bip : <strong>« Jonathan, assisté de Marc et Alex »</strong>.</p></div>
+        <div><span>3</span><p>Le résultat simulé apparaît ici. Aucun but n’est sauvegardé.</p></div>
+      </div>
+
+      <div class="voice-test-roster">
+        <strong>${players.length} nom${players.length===1?'':'s'} disponible${players.length===1?'':'s'} pour le test</strong>
+        <div>${players.map(p=>`<span>${esc(playerName(p))}</span>`).join('')}</div>
+      </div>
+
+      <div class="row between voice-test-history-title">
+        <strong>Derniers essais</strong>
+        ${voiceTest.results.length?'<button type="button" class="btn small ghost" data-action="clear-voice-test">Effacer</button>':''}
+      </div>
+      ${results}
+    </section>
+  `;
+}
+
+async function toggleVoiceTest() {
+  if (!isAdmin()) throw new Error('Réservé aux administrateurs.');
+  if (voiceTest.enabled) {
+    stopVoiceTest('Laboratoire vocal désactivé.');
+    return;
+  }
+  await startVoiceTest();
+}
+
+async function startVoiceTest() {
+  if (!isAdmin()) throw new Error('Réservé aux administrateurs.');
+  if (!SpeechRecognitionCtor) throw new Error('La reconnaissance vocale n’est pas disponible dans ce navigateur.');
+  if (!activePlayers().length) throw new Error('Crée au moins un joueur avant de tester les noms.');
+
+  if (voice.enabled) stopVoiceMode('Mode vocal de match désactivé pendant le test.', false);
+
+  await unlockAudio();
+
+  voiceTest.enabled = true;
+  voiceTest.phase = 'idle';
+  voiceTest.lastTranscript = '';
+  setVoiceTestStatus('Micro actif — dis « Ajouter un but ».', 'listening');
+
+  if (!voiceTest.recognition) {
+    const recognition = new SpeechRecognitionCtor();
+    recognition.lang = 'fr-CA';
+    recognition.continuous = true;
+    recognition.interimResults = true;
+    recognition.maxAlternatives = 3;
+
+    recognition.onstart = () => {
+      voiceTest.running = true;
+      if (!voiceTest.enabled) return;
+      setVoiceTestStatus(
+        voiceTest.phase === 'details'
+          ? 'Commande détectée — dis le buteur puis les aides.'
+          : 'Micro actif — dis « Ajouter un but ».',
+        voiceTest.phase === 'details' ? 'waiting' : 'listening'
+      );
+    };
+
+    recognition.onresult = event => {
+      handleVoiceTestRecognitionResult(event).catch(handleVoiceTestFailure);
+    };
+
+    recognition.onerror = event => {
+      const code = String(event?.error || '');
+      voiceTest.running = false;
+      if (code === 'not-allowed' || code === 'service-not-allowed') {
+        stopVoiceTest('Permission micro refusée. Autorise le micro puis réessaie.', false);
+        render();
+        return;
+      }
+      if (code === 'audio-capture') {
+        stopVoiceTest('Aucun microphone disponible.', false);
+        render();
+        return;
+      }
+      if (code === 'no-speech' || code === 'aborted') return;
+      setVoiceTestStatus(`Reconnaissance vocale : ${code || 'erreur inconnue'}. Nouvelle tentative…`, 'error');
+    };
+
+    recognition.onend = () => {
+      voiceTest.running = false;
+      if (!voiceTest.enabled) return;
+      clearTimeout(voiceTest.restartTimer);
+      voiceTest.restartTimer = setTimeout(() => {
+        if (voiceTest.enabled) startVoiceTestRecognition();
+      }, 350);
+    };
+
+    voiceTest.recognition = recognition;
+  }
+
+  startVoiceTestRecognition();
+  render();
+}
+
+function startVoiceTestRecognition() {
+  if (!voiceTest.enabled || !voiceTest.recognition || voiceTest.running) return;
+  try {
+    voiceTest.recognition.start();
+  } catch (err) {
+    if (err?.name !== 'InvalidStateError') {
+      setVoiceTestStatus('Impossible de redémarrer le micro. Je réessaie…', 'error');
+    }
+  }
+}
+
+function stopVoiceTest(message='Laboratoire vocal désactivé.', rerender=true) {
+  voiceTest.enabled = false;
+  voiceTest.phase = 'idle';
+  voiceTest.lastTranscript = '';
+  voiceTest.status = message;
+  voiceTest.statusKind = 'idle';
+  clearTimeout(voiceTest.detailTimer);
+  clearTimeout(voiceTest.restartTimer);
+  voiceTest.detailTimer = null;
+  voiceTest.restartTimer = null;
+
+  if (voiceTest.recognition) {
+    try { voiceTest.recognition.abort(); } catch {}
+  }
+  voiceTest.running = false;
+  if (rerender) render();
+}
+
+async function handleVoiceTestRecognitionResult(event) {
+  if (!voiceTest.enabled || !isAdmin()) return;
+
+  for (let i = event.resultIndex; i < event.results.length; i++) {
+    const result = event.results[i];
+    const alternatives = [];
+    for (let j = 0; j < result.length; j++) {
+      if (result[j]?.transcript) alternatives.push(String(result[j].transcript).trim());
+    }
+    if (!alternatives.length) continue;
+
+    const primary = alternatives[0];
+    voiceTest.lastTranscript = primary;
+    updateVoiceTestHeard(primary);
+
+    if (voiceTest.phase === 'idle') {
+      const triggered = alternatives
+        .map(t => ({raw:t, normalized:normalizeSpeechText(t), hit:findVoiceTrigger(normalizeSpeechText(t))}))
+        .find(x => x.hit);
+
+      if (triggered) {
+        voiceTest.phase = 'details';
+        setVoiceTestStatus('Commande « Ajouter un but » détectée — dis le buteur et les aides.', 'waiting');
+        voiceBeep('trigger');
+        restartVoiceTestDetailTimeout();
+
+        const remainder = triggered.normalized.slice(triggered.hit.end).trim();
+        if (result.isFinal && remainder) {
+          await processVoiceTestAlternatives([remainder]);
+        }
+        continue;
+      }
+    }
+
+    if (voiceTest.phase === 'details' && result.isFinal) {
+      let detailOptions = alternatives.map(normalizeSpeechText).filter(Boolean);
+      detailOptions = detailOptions.map(value => {
+        const hit = findVoiceTrigger(value);
+        return hit ? value.slice(hit.end).trim() : value;
+      }).filter(Boolean);
+
+      if (detailOptions.length) await processVoiceTestAlternatives(detailOptions);
+    }
+  }
+}
+
+async function processVoiceTestAlternatives(options) {
+  if (!voiceTest.enabled || voiceTest.phase !== 'details') return;
+
+  const parses = options
+    .map(value => ({text:value, parsed:parseVoiceTestDetails(value)}))
+    .filter(item => item.parsed?.ok)
+    .sort((a,b) => b.parsed.confidence - a.parsed.confidence);
+
+  if (!parses.length) {
+    const transcript = options[0] || '';
+    const fallback = parseVoiceTestDetails(transcript);
+    voiceTest.lastTranscript = transcript;
+    updateVoiceTestHeard(transcript);
+    const message = fallback?.message || 'Je n’ai pas reconnu le buteur.';
+    voiceTest.results.unshift({
+      ok:false,
+      transcript,
+      summary:message,
+      confidence:null,
+      at:Date.now()
+    });
+    voiceTest.results = voiceTest.results.slice(0,12);
+    setVoiceTestStatus(`${message} Répète les noms.`, 'error');
+    voiceBeep('error');
+    restartVoiceTestDetailTimeout();
+    render();
+    return;
+  }
+
+  const best = parses[0];
+  const parsed = best.parsed;
+  const assistNames = parsed.assists.map(id=>playerName(findPlayer(id))).filter(Boolean);
+  const assistLabel = assistNames.length ? ` · aides ${assistNames.join(' et ')}` : ' · sans aide';
+  const summary = `SIMULATION — But ${playerName(parsed.scorer)}${assistLabel}`;
+
+  voiceTest.results.unshift({
+    ok:true,
+    transcript:best.text,
+    summary,
+    confidence:parsed.confidence,
+    at:Date.now()
+  });
+  voiceTest.results = voiceTest.results.slice(0,12);
+  voiceTest.lastTranscript = best.text;
+  voiceTest.phase = 'idle';
+  clearTimeout(voiceTest.detailTimer);
+  voiceTest.detailTimer = null;
+  setVoiceTestStatus(`${summary} · rien n’a été enregistré.`, 'success');
+  voiceBeep('success');
+  render();
+
+  setTimeout(() => {
+    if (voiceTest.enabled && voiceTest.phase === 'idle') {
+      voiceTest.lastTranscript = '';
+      setVoiceTestStatus('Micro actif — dis « Ajouter un but ».', 'listening');
+      updateVoiceTestHeard('');
+    }
+  }, 4500);
+}
+
+function parseVoiceTestDetails(text) {
+  const normalized = normalizeSpeechText(text);
+  if (!normalized) return {ok:false, message:'Je n’ai rien entendu après la commande.'};
+
+  if (/\b(annule|annuler|cancel)\b/.test(normalized)) {
+    return {ok:false, cancelled:true, message:'Commande annulée.'};
+  }
+
+  const players = activePlayers();
+  const mentions = findVoicePlayerMentions(normalized, players);
+  if (!mentions.length) {
+    return {ok:false, message:'Aucun nom de joueur reconnu.'};
+  }
+
+  const scorer = mentions[0].player;
+  const noAssist = /\b(sans\s+(aide|aides|passe|passes)|aucune?\s+(aide|passe))\b/.test(normalized);
+  const assistMentions = noAssist ? [] : mentions.slice(1);
+
+  if (assistMentions.length > 2) {
+    return {ok:false, message:'Plus de deux aides ont été reconnues.'};
+  }
+
+  const assists = [];
+  for (const mention of assistMentions) {
+    if (mention.player.id === scorer.id) continue;
+    if (!assists.includes(mention.player.id)) assists.push(mention.player.id);
+  }
+
+  const confidenceMentions = mentions.slice(0, 1 + assists.length);
+  const confidence = confidenceMentions.reduce((sum,item)=>sum+item.score,0) / Math.max(1,confidenceMentions.length);
+  return {ok:true, scorer, scorerId:scorer.id, assists, confidence};
+}
+
+function restartVoiceTestDetailTimeout() {
+  clearTimeout(voiceTest.detailTimer);
+  voiceTest.detailTimer = setTimeout(() => {
+    if (!voiceTest.enabled || voiceTest.phase !== 'details') return;
+    voiceTest.phase = 'idle';
+    setVoiceTestStatus('Délai dépassé — redis « Ajouter un but ».', 'error');
+    voiceBeep('error');
+  }, 10000);
+}
+
+function setVoiceTestStatus(message, kind='idle') {
+  voiceTest.status = message;
+  voiceTest.statusKind = kind;
+  const el = document.getElementById('voiceTestStatus');
+  if (el) {
+    el.className = `voice-status ${kind}`;
+    const span = el.querySelector('span:last-child');
+    if (span) span.textContent = message;
+  }
+}
+
+function updateVoiceTestHeard(text) {
+  const card = document.querySelector('.voice-test-card');
+  if (!card) return;
+  let el = card.querySelector('.voice-test-heard');
+  if (!text) {
+    if (el) el.remove();
+    return;
+  }
+  if (!el) {
+    el = document.createElement('div');
+    el.className = 'voice-heard voice-test-heard';
+    const instructions = card.querySelector('.voice-test-instructions');
+    card.insertBefore(el, instructions || null);
+  }
+  el.textContent = `Entendu : « ${text} »`;
+}
+
+function handleVoiceTestFailure(err) {
+  console.error(err);
+  if (!voiceTest.enabled) return;
+  setVoiceTestStatus(err?.message || 'Erreur du laboratoire vocal.', 'error');
+  voiceBeep('error');
+  if (voiceTest.phase === 'details') restartVoiceTestDetailTimeout();
+}
+
 
 // ---------- Clock + alarm ----------
 function updateClockDisplay() {

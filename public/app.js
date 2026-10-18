@@ -9,7 +9,7 @@ import {
   writeBatch, serverTimestamp, Timestamp, onSnapshot, query, orderBy, where, runTransaction, arrayUnion, arrayRemove, deleteField
 } from 'https://www.gstatic.com/firebasejs/12.19.0/firebase-firestore.js';
 
-const APP_VERSION = '8.8.0';
+const APP_VERSION = '8.10.0';
 const root = document.getElementById('app');
 const modal = document.getElementById('modal');
 const toastEl = document.getElementById('toast');
@@ -778,7 +778,7 @@ function openAdminAttendance(matchId) {
           <button type="button" class="${status==='yes'?'active yes':''}" data-action="admin-set-attendance" data-match="${match.id}" data-player="${p.id}" data-status="yes">${sub?'Dispo':'Présent'}</button>
           <button type="button" class="${status==='maybe'?'active maybe':''}" data-action="admin-set-attendance" data-match="${match.id}" data-player="${p.id}" data-status="maybe">Incertain</button>
           <button type="button" class="${status==='no'?'active no':''}" data-action="admin-set-attendance" data-match="${match.id}" data-player="${p.id}" data-status="no">${sub?'Indispo':'Absent'}</button>
-          <button type="button" class="admin-attendance-clear ${status==='unknown'?'active':''}" data-action="admin-set-attendance" data-match="${match.id}" data-player="${p.id}" data-status="unknown" title="Remettre sans réponse">—</button>
+          <button type="button" class="admin-attendance-clear ${status==='unknown'?'active':''}" data-action="admin-set-attendance" data-match="${match.id}" data-player="${p.id}" data-status="unknown" title="Revenir au statut par défaut">—</button>
         </div>
       </div>`;
     }).join('')}</section>`;
@@ -787,7 +787,7 @@ function openAdminAttendance(matchId) {
     <div class="archive-kicker">ADMIN · PRÉSENCES</div>
     <h2>Gérer les présences</h2>
     <div class="muted">${formatDate(match.startAt)} · ${formatTime(match.startAt)}${match.location?' · '+esc(match.location):''}</div>
-    <p class="admin-attendance-help">Tu peux répondre au nom d’un joueur. Le bouton « — » remet sa réponse à <strong>Sans réponse</strong>.</p>
+    <p class="admin-attendance-help">Tu peux répondre au nom d’un joueur. Le bouton « — » efface la réponse manuelle : un joueur régulier ou un gardien régulier revient à <strong>Présent par défaut</strong>; seuls les remplaçants reviennent à <strong>Sans réponse</strong>.</p>
     ${group('Joueurs réguliers','regular')}
     ${group('Gardiens','goalie')}
     ${group('Remplaçants','sub')}
@@ -868,8 +868,21 @@ function attendanceSummary(match) {
 
 function getMatchResponseStatus(match, playerId) {
   if (!match || !playerId) return 'unknown';
-  if (match.id===state.currentMatch?.id && state.responses.has(playerId)) return state.responses.get(playerId)?.status || 'unknown';
-  return match.attendance?.[playerId] || 'unknown';
+
+  // v8.10: tous les membres réguliers de la ligue — joueurs ET gardiens —
+  // sont considérés présents par défaut pour tous les matchs, y compris ceux
+  // déjà créés. Une réponse explicite (Absent, Incertain ou Présent) prend
+  // toujours priorité. Seuls les remplaçants restent « sans réponse » par défaut.
+  if (match.id===state.currentMatch?.id && state.responses.has(playerId)) {
+    const liveStatus = state.responses.get(playerId)?.status;
+    if (liveStatus) return liveStatus;
+  }
+
+  const savedStatus = match.attendance?.[playerId];
+  if (savedStatus) return savedStatus;
+
+  const player = findPlayer(playerId);
+  return player && (player.type === 'regular' || player.type === 'goalie') ? 'yes' : 'unknown';
 }
 
 function groupMatchesByMonth(matches) {

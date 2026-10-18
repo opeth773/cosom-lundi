@@ -9,7 +9,7 @@ import {
   writeBatch, serverTimestamp, Timestamp, onSnapshot, query, orderBy, where, runTransaction, arrayUnion, arrayRemove, deleteField
 } from 'https://www.gstatic.com/firebasejs/12.19.0/firebase-firestore.js';
 
-const APP_VERSION = '8.7.0';
+const APP_VERSION = '8.8.0';
 const root = document.getElementById('app');
 const modal = document.getElementById('modal');
 const toastEl = document.getElementById('toast');
@@ -717,10 +717,9 @@ function renderCalendarRow(m, mine) {
         <button type="button" class="pill attendance-pill" data-action="calendar-attendance" data-match="${m.id}" data-status="maybe" title="Voir les incertains">${summary.maybe} incertain${summary.maybe>1?'s':''}</button>
         <button type="button" class="pill attendance-pill" data-action="calendar-attendance" data-match="${m.id}" data-status="unknown" title="Voir ceux qui n'ont pas répondu">${summary.unknown} sans réponse</button>
       </div>
-      ${summary.yesNames.length?`<div class="calendar-names"><strong>Confirmés :</strong> ${esc(summary.yesNames.join(', '))}</div>`:''}
+      ${(summary.yesNames.length || summary.subYesNames.length)?`<div class="calendar-names"><strong>Confirmés :</strong> ${renderConfirmedCalendarNames(summary)}</div>`:''}
       ${summary.noNames.length?`<div class="calendar-names"><strong>Absents :</strong> ${esc(summary.noNames.join(', '))}</div>`:''}
       ${summary.maybeNames.length?`<div class="calendar-names"><strong>Incertains :</strong> ${esc(summary.maybeNames.join(', '))}</div>`:''}
-      ${summary.subYesNames.length?`<div class="calendar-names"><strong>Remplaçants dispo :</strong> ${esc(summary.subYesNames.join(', '))}</div>`:''}
       ${summary.subNoNames.length?`<div class="calendar-names"><strong>Remplaçants indispo :</strong> ${esc(summary.subNoNames.join(', '))}</div>`:''}
       ${summary.subMaybeNames.length?`<div class="calendar-names"><strong>Remplaçants incertains :</strong> ${esc(summary.subMaybeNames.join(', '))}</div>`:''}
     </div>
@@ -732,19 +731,33 @@ function renderCalendarRow(m, mine) {
   </div>`;
 }
 
+function renderConfirmedCalendarNames(summary) {
+  const parts = [
+    ...summary.yesNames.map(name => esc(name)),
+    ...summary.subYesNames.map(name => `<span class="calendar-sub-confirmed">${esc(name)}</span>`)
+  ];
+  return parts.join(', ');
+}
+
 function openCalendarAttendance(matchId, status) {
   const match = state.matches.find(m => m.id === matchId);
   if (!match) return;
   const summary = attendanceSummary(match);
   const groups = {
-    yes: {title:'Présents', names:summary.yesNames},
-    no: {title:'Absents', names:summary.noNames},
-    maybe: {title:'Incertains', names:summary.maybeNames},
-    unknown: {title:'Sans réponse', names:summary.unknownNames}
+    yes: {
+      title:'Présents',
+      entries:[
+        ...summary.yesNames.map(name=>({name,isSub:false})),
+        ...summary.subYesNames.map(name=>({name,isSub:true}))
+      ]
+    },
+    no: {title:'Absents', entries:summary.noNames.map(name=>({name,isSub:false}))},
+    maybe: {title:'Incertains', entries:summary.maybeNames.map(name=>({name,isSub:false}))},
+    unknown: {title:'Sans réponse', entries:summary.unknownNames.map(name=>({name,isSub:false}))}
   };
   const group = groups[status] || groups.unknown;
-  const list = group.names.length
-    ? `<div class="attendance-name-list">${group.names.map(name=>`<div class="attendance-name-row">${esc(name)}</div>`).join('')}</div>`
+  const list = group.entries.length
+    ? `<div class="attendance-name-list">${group.entries.map(entry=>`<div class="attendance-name-row${entry.isSub?' substitute':''}">${entry.isSub?`<strong>${esc(entry.name)}</strong>`:esc(entry.name)}</div>`).join('')}</div>`
     : '<div class="empty">Personne dans cette catégorie.</div>';
   openModal(`<h2>${esc(group.title)}</h2><div class="muted">${formatDate(match.startAt)} · ${formatTime(match.startAt)}</div>${list}<div class="modal-actions"><button type="button" class="btn primary wide" data-modal-close>Fermer</button></div>`);
 }
@@ -838,7 +851,8 @@ function attendanceSummary(match) {
   const subNoPlayers = subs.filter(p=>status(p)==='no');
   const subMaybePlayers = subs.filter(p=>status(p)==='maybe');
   return {
-    yes: yesPlayers.length,
+    // Un remplaçant confirmé disponible compte comme présent au calendrier.
+    yes: yesPlayers.length + subYesPlayers.length,
     no: noPlayers.length,
     maybe: maybePlayers.length,
     unknown: unknownPlayers.length,

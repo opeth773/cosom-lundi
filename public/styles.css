@@ -3809,3 +3809,14 @@ tbody td:first-child {
     color: #ffc1c7;
   }
 }
+
+/* v8.8 — Calendar: confirmed substitutes are included with present players. */
+.calendar-sub-confirmed {
+  color: var(--ink-strong);
+  font-weight: 850;
+}
+
+.attendance-name-row.substitute {
+  color: var(--ink-strong);
+}
+

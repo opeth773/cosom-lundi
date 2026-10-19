@@ -65,11 +65,14 @@ const voice = {
   enabled: false,
   running: false,
   recognition: null,
+  mediaStream: null,
   matchId: null,
   phase: 'idle',
   captured: null,
   detailTimer: null,
   restartTimer: null,
+  startedAt: 0,
+  rapidEnds: 0,
   status: 'Mode vocal inactif.',
   statusKind: 'idle',
   lastTranscript: ''
@@ -82,9 +85,12 @@ const voiceTest = {
   enabled: false,
   running: false,
   recognition: null,
+  mediaStream: null,
   phase: 'idle',
   detailTimer: null,
   restartTimer: null,
+  startedAt: 0,
+  rapidEnds: 0,
   status: 'Laboratoire vocal inactif.',
   statusKind: 'idle',
   lastTranscript: '',
@@ -1809,6 +1815,7 @@ async function startVoiceMode() {
   if (!lineup.length) throw new Error('Ajoute d’abord les joueurs aux équipes.');
 
   await unlockAudio();
+  await keepMicrophoneOpen(voice);
   await requestWakeLock();
 
   voice.enabled = true;
@@ -1859,10 +1866,10 @@ async function startVoiceMode() {
     recognition.onend = () => {
       voice.running = false;
       if (!voice.enabled) return;
-      clearTimeout(voice.restartTimer);
-      voice.restartTimer = setTimeout(() => {
-        if (voice.enabled) startVoiceRecognition();
-      }, 350);
+      scheduleVoiceRestart(voice, startVoiceRecognition, setVoiceStatus, () => {
+        stopVoiceMode('Le navigateur ferme la reconnaissance vocale immédiatement. Recharge la page puis réessaie.', false);
+        render();
+      });
     };
 
     voice.recognition = recognition;
@@ -1875,6 +1882,7 @@ async function startVoiceMode() {
 function startVoiceRecognition() {
   if (!voice.enabled || !voice.recognition || voice.running) return;
   try {
+    voice.startedAt = Date.now();
     voice.recognition.start();
   } catch (err) {
     if (err?.name !== 'InvalidStateError') {
@@ -1899,6 +1907,9 @@ function stopVoiceMode(message='Mode vocal désactivé.', rerender=true) {
   if (voice.recognition) {
     try { voice.recognition.abort(); } catch {}
   }
+  releaseVoiceMicrophone(voice);
+  voice.startedAt = 0;
+  voice.rapidEnds = 0;
   voice.running = false;
   if (rerender) render();
 }
@@ -2385,6 +2396,7 @@ async function startVoiceTest() {
   if (voice.enabled) stopVoiceMode('Mode vocal de match désactivé pendant le test.', false);
 
   await unlockAudio();
+  await keepMicrophoneOpen(voiceTest);
 
   voiceTest.enabled = true;
   voiceTest.phase = 'idle';
@@ -2433,10 +2445,10 @@ async function startVoiceTest() {
     recognition.onend = () => {
       voiceTest.running = false;
       if (!voiceTest.enabled) return;
-      clearTimeout(voiceTest.restartTimer);
-      voiceTest.restartTimer = setTimeout(() => {
-        if (voiceTest.enabled) startVoiceTestRecognition();
-      }, 350);
+      scheduleVoiceRestart(voiceTest, startVoiceTestRecognition, setVoiceTestStatus, () => {
+        stopVoiceTest('Le navigateur ferme la reconnaissance vocale immédiatement. Recharge la page puis réessaie.', false);
+        render();
+      });
     };
 
     voiceTest.recognition = recognition;
@@ -2449,6 +2461,7 @@ async function startVoiceTest() {
 function startVoiceTestRecognition() {
   if (!voiceTest.enabled || !voiceTest.recognition || voiceTest.running) return;
   try {
+    voiceTest.startedAt = Date.now();
     voiceTest.recognition.start();
   } catch (err) {
     if (err?.name !== 'InvalidStateError') {
@@ -2471,6 +2484,9 @@ function stopVoiceTest(message='Laboratoire vocal désactivé.', rerender=true) 
   if (voiceTest.recognition) {
     try { voiceTest.recognition.abort(); } catch {}
   }
+  releaseVoiceMicrophone(voiceTest);
+  voiceTest.startedAt = 0;
+  voiceTest.rapidEnds = 0;
   voiceTest.running = false;
   if (rerender) render();
 }
@@ -2680,6 +2696,63 @@ function getRemainingSeconds(m) {
   const clock=m?.clock||{}; if(clock.running&&clock.endsAt){return Math.max(0,Math.ceil((tsMillis(clock.endsAt)-Date.now())/1000));} return Math.max(0,Number(clock.remainingSeconds ?? m?.periodSeconds ?? 1200));
 }
 async function unlockAudio(){try{audioCtx=audioCtx||new(window.AudioContext||window.webkitAudioContext)();if(audioCtx.state==='suspended')await audioCtx.resume();}catch{}}
+
+async function keepMicrophoneOpen(holder) {
+  if (holder.mediaStream?.active) return;
+  if (!navigator.mediaDevices?.getUserMedia) return;
+  try {
+    holder.mediaStream = await navigator.mediaDevices.getUserMedia({
+      audio: {
+        echoCancellation: true,
+        noiseSuppression: true,
+        autoGainControl: true
+      }
+    });
+  } catch (err) {
+    const name = String(err?.name || '');
+    if (name === 'NotAllowedError' || name === 'SecurityError') {
+      throw new Error('Permission micro refusée. Autorise le micro puis réessaie.');
+    }
+    if (name === 'NotFoundError' || name === 'DevicesNotFoundError') {
+      throw new Error('Aucun microphone disponible.');
+    }
+    throw err;
+  }
+}
+
+function releaseVoiceMicrophone(holder) {
+  if (!holder.mediaStream) return;
+  try {
+    holder.mediaStream.getTracks().forEach(track => track.stop());
+  } catch {}
+  holder.mediaStream = null;
+}
+
+function scheduleVoiceRestart(holder, restartFn, statusFn, giveUpFn) {
+  clearTimeout(holder.restartTimer);
+  const livedMs = holder.startedAt ? Date.now() - holder.startedAt : 0;
+  holder.startedAt = 0;
+
+  // A normal recognition session may eventually end on its own. A session
+  // that dies almost immediately is treated differently so we don't create
+  // the old open/close microphone loop.
+  if (livedMs > 0 && livedMs < 1200) holder.rapidEnds += 1;
+  else holder.rapidEnds = 0;
+
+  if (holder.rapidEnds >= 3) {
+    statusFn('La reconnaissance s’arrête immédiatement dans ce navigateur. J’arrête les redémarrages pour éviter le spam du micro.', 'error');
+    giveUpFn();
+    return;
+  }
+
+  const delay = holder.rapidEnds > 0 ? 1800 * holder.rapidEnds : 900;
+  if (holder.rapidEnds > 0) {
+    statusFn(`Le service vocal s’est arrêté. Nouvelle tentative dans ${Math.ceil(delay / 1000)} s…`, 'waiting');
+  }
+  holder.restartTimer = setTimeout(() => {
+    if (holder.enabled) restartFn();
+  }, delay);
+}
 async function playAlarm(){await unlockAudio();await requestWakeLock();if(!audioCtx)return;const now=audioCtx.currentTime;[0,.45,.9].forEach(off=>{const o=audioCtx.createOscillator(),g=audioCtx.createGain();o.frequency.value=880;g.gain.setValueAtTime(.0001,now+off);g.gain.exponentialRampToValueAtTime(.25,now+off+.02);g.gain.exponentialRampToValueAtTime(.0001,now+off+.28);o.connect(g).connect(audioCtx.destination);o.start(now+off);o.stop(now+off+.3);});}
 
 // ---------- Helpers ----------

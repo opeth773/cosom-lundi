@@ -1,8 +1,8 @@
-// COSOM service worker v8.14
+// COSOM service worker v8.15
 // Important: application code is intentionally NOT cached.
 // The app is online-first and Firebase Hosting serves index/app/styles with no-store.
 // This prevents old PWA caches from mixing releases after frequent deployments.
-const CACHE = 'cosom-static-v8.14';
+const CACHE = 'cosom-static-v8.15';
 const STATIC = [
   '/icons/icon-192.png',
   '/icons/icon-512.png'

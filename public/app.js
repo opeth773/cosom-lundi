@@ -9,7 +9,7 @@ import {
   writeBatch, serverTimestamp, Timestamp, onSnapshot, query, orderBy, where, runTransaction, arrayUnion, arrayRemove, deleteField
 } from 'https://www.gstatic.com/firebasejs/12.19.0/firebase-firestore.js';
 
-const APP_VERSION = '8.14.0';
+const APP_VERSION = '8.15.0';
 const root = document.getElementById('app');
 const modal = document.getElementById('modal');
 const toastEl = document.getElementById('toast');
@@ -69,9 +69,12 @@ const voice = {
   phase: 'idle',
   captured: null,
   detailTimer: null,
+  detailProcessTimer: null,
+  detailSegments: {},
   restartTimer: null,
   startedAt: 0,
   rapidEnds: 0,
+  sessionHadTranscript: false,
   status: 'Mode vocal inactif.',
   statusKind: 'idle',
   lastTranscript: ''
@@ -86,9 +89,14 @@ const voiceTest = {
   recognition: null,
   phase: 'idle',
   detailTimer: null,
+  detailProcessTimer: null,
+  detailSegments: {},
   restartTimer: null,
   startedAt: 0,
   rapidEnds: 0,
+  sessionHadTranscript: false,
+  pauseAfterResult: false,
+  detailRestarts: 0,
   status: 'Laboratoire vocal inactif.',
   statusKind: 'idle',
   lastTranscript: '',
@@ -1820,6 +1828,7 @@ async function startVoiceMode() {
   voice.phase = 'idle';
   voice.captured = null;
   voice.lastTranscript = '';
+  resetVoiceDetailCollector(voice);
   setVoiceStatus('Micro actif — dis « Ajouter un but ».', 'listening');
 
   if (!voice.recognition) {
@@ -1831,6 +1840,7 @@ async function startVoiceMode() {
 
     recognition.onstart = () => {
       voice.running = true;
+      voice.sessionHadTranscript = false;
       if (voice.enabled) setVoiceStatus(
         voice.phase === 'details'
           ? 'Je t’écoute : dis le buteur puis les aides.'
@@ -1843,26 +1853,16 @@ async function startVoiceMode() {
       if (!voice.enabled) return;
       setVoiceStatus(
         voice.phase === 'details'
-          ? 'Micro connecté — dis le buteur puis les aides.'
+          ? 'Micro connecté — dis toute la phrase du but.'
           : 'Micro connecté — dis « Ajouter un but ».',
         voice.phase === 'details' ? 'waiting' : 'listening'
       );
     };
 
-    recognition.onspeechstart = () => {
-      if (!voice.enabled) return;
-      setVoiceStatus('Voix détectée — j’analyse…', 'waiting');
-    };
-
-    recognition.onnomatch = () => {
-      if (!voice.enabled) return;
-      setVoiceStatus(
-        voice.phase === 'details'
-          ? 'J’ai entendu quelque chose, mais je n’ai pas pu le transcrire. Répète les noms.'
-          : 'J’ai entendu quelque chose, mais je n’ai pas pu le transcrire. Redis « Ajouter un but ».',
-        'error'
-      );
-    };
+    // Chrome/Edge peut déclencher onspeechstart/onnomatch sur du bruit ambiant.
+    // On ne les utilise donc plus comme preuve qu’une vraie voix a été entendue.
+    recognition.onspeechstart = () => {};
+    recognition.onnomatch = () => {};
 
     recognition.onresult = event => {
       handleVoiceRecognitionResult(event).catch(handleVoiceFailure);
@@ -1922,15 +1922,19 @@ function stopVoiceMode(message='Mode vocal désactivé.', rerender=true) {
   voice.status = message;
   voice.statusKind = 'idle';
   clearTimeout(voice.detailTimer);
+  clearTimeout(voice.detailProcessTimer);
   clearTimeout(voice.restartTimer);
   voice.detailTimer = null;
+  voice.detailProcessTimer = null;
   voice.restartTimer = null;
+  voice.detailSegments = {};
 
   if (voice.recognition) {
     try { voice.recognition.abort(); } catch {}
   }
   voice.startedAt = 0;
   voice.rapidEnds = 0;
+  voice.sessionHadTranscript = false;
   voice.running = false;
   if (rerender) render();
 }
@@ -1946,11 +1950,14 @@ async function handleVoiceRecognitionResult(event) {
     }
     if (!alternatives.length) continue;
 
+    voice.sessionHadTranscript = true;
     const primary = alternatives[0];
-    voice.lastTranscript = primary;
-    updateVoiceHeard(primary);
+    const normalizedPrimary = normalizeSpeechText(primary);
 
     if (voice.phase === 'idle') {
+      voice.lastTranscript = primary;
+      updateVoiceHeard(primary);
+
       const triggered = alternatives
         .map(t => ({raw:t, normalized:normalizeSpeechText(t), hit:findVoiceTrigger(normalizeSpeechText(t))}))
         .find(x => x.hit);
@@ -1958,22 +1965,36 @@ async function handleVoiceRecognitionResult(event) {
       if (triggered) {
         captureVoiceGoalMoment();
         const remainder = triggered.normalized.slice(triggered.hit.end).trim();
-
-        if (result.isFinal && remainder) {
-          await processVoiceGoalDetails(remainder);
+        if (remainder) {
+          voice.lastTranscript = remainder;
+          updateVoiceHeard(remainder);
+          if (result.isFinal) {
+            setVoiceDetailSegment(voice, i, remainder);
+            scheduleVoiceGoalDetailProcessing();
+          }
         }
         continue;
       }
     }
 
-    if (voice.phase === 'details' && result.isFinal) {
-      let detailOptions = alternatives.map(normalizeSpeechText).filter(Boolean);
-      detailOptions = detailOptions.map(text => {
-        const hit = findVoiceTrigger(text);
-        return hit ? text.slice(hit.end).trim() : text;
-      }).filter(Boolean);
+    if (voice.phase === 'details') {
+      const hit = findVoiceTrigger(normalizedPrimary);
+      const detailText = (hit ? normalizedPrimary.slice(hit.end) : normalizedPrimary).trim();
+      if (!detailText) continue;
 
-      if (detailOptions.length) await processVoiceGoalAlternatives(detailOptions);
+      if (result.isFinal) {
+        setVoiceDetailSegment(voice, i, detailText);
+        const combined = getVoiceDetailText(voice);
+        voice.lastTranscript = combined;
+        updateVoiceHeard(combined);
+        setVoiceStatus('J’ai les détails — j’attends la fin de ta phrase…', 'waiting');
+        scheduleVoiceGoalDetailProcessing();
+      } else {
+        const committed = getVoiceDetailText(voice);
+        const preview = [committed, detailText].filter(Boolean).join(' ').trim();
+        voice.lastTranscript = preview;
+        updateVoiceHeard(preview);
+      }
     }
   }
 }
@@ -1984,6 +2005,43 @@ function findVoiceTrigger(text) {
   return {start:match.index, end:match.index + match[0].length};
 }
 
+function resetVoiceDetailCollector(holder) {
+  clearTimeout(holder.detailProcessTimer);
+  holder.detailProcessTimer = null;
+  holder.detailSegments = {};
+}
+
+function setVoiceDetailSegment(holder, resultIndex, text) {
+  const normalized = normalizeSpeechText(text);
+  if (!normalized) return;
+  holder.detailSegments[String(resultIndex)] = normalized;
+}
+
+function getVoiceDetailText(holder) {
+  return Object.keys(holder.detailSegments || {})
+    .sort((a,b) => Number(a) - Number(b))
+    .map(key => holder.detailSegments[key])
+    .filter(Boolean)
+    .join(' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+function scheduleVoiceGoalDetailProcessing(delay=2000) {
+  clearTimeout(voice.detailProcessTimer);
+  voice.detailProcessTimer = setTimeout(() => {
+    voice.detailProcessTimer = null;
+    finalizeVoiceGoalDetails().catch(handleVoiceFailure);
+  }, delay);
+}
+
+async function finalizeVoiceGoalDetails() {
+  if (!voice.enabled || voice.phase !== 'details') return;
+  const text = getVoiceDetailText(voice);
+  if (!text) return;
+  await processVoiceGoalAlternatives([text]);
+}
+
 function captureVoiceGoalMoment() {
   if (!state.currentMatch || state.currentMatch.id !== voice.matchId) return;
 
@@ -1991,6 +2049,7 @@ function captureVoiceGoalMoment() {
   const remaining = Math.max(0, Math.min(periodSeconds, getRemainingSeconds(state.currentMatch)));
 
   voice.phase = 'details';
+  resetVoiceDetailCollector(voice);
   voice.captured = {
     matchId: state.currentMatch.id,
     period: Number(state.currentMatch.period || 1),
@@ -2021,8 +2080,13 @@ async function processVoiceGoalAlternatives(options) {
   if (!parses.length) {
     const first = options[0] || '';
     const fallback = parseVoiceGoalDetails(first);
+    if (fallback?.cancelled) {
+      resetVoiceDetailCollector(voice);
+      return;
+    }
     voice.lastTranscript = first;
     updateVoiceHeard(first);
+    resetVoiceDetailCollector(voice);
     setVoiceStatus(fallback?.message || 'Je n’ai pas reconnu le buteur. Répète le nom et les aides.', 'error');
     voiceBeep('error');
     restartVoiceDetailTimeout();
@@ -2031,6 +2095,8 @@ async function processVoiceGoalAlternatives(options) {
 
   voice.lastTranscript = parses[0].text;
   updateVoiceHeard(parses[0].text);
+  clearTimeout(voice.detailProcessTimer);
+  voice.detailProcessTimer = null;
   await commitVoiceGoal(parses[0].parsed);
 }
 
@@ -2208,6 +2274,7 @@ async function commitVoiceGoal(parsed) {
 
   voice.phase = 'saving';
   clearTimeout(voice.detailTimer);
+  clearTimeout(voice.detailProcessTimer);
   setVoiceStatus('Enregistrement du but…', 'waiting');
 
   const data = {
@@ -2236,6 +2303,7 @@ async function commitVoiceGoal(parsed) {
     voiceBeep('success');
     voice.phase = 'idle';
     voice.captured = null;
+    resetVoiceDetailCollector(voice);
 
     setTimeout(() => {
       if (voice.enabled && voice.phase === 'idle') {
@@ -2247,6 +2315,7 @@ async function commitVoiceGoal(parsed) {
   } catch (err) {
     console.error(err);
     voice.phase = 'details';
+    resetVoiceDetailCollector(voice);
     setVoiceStatus('Impossible d’enregistrer le but. Répète les détails ou utilise le bouton + But.', 'error');
     voiceBeep('error');
     restartVoiceDetailTimeout();
@@ -2257,9 +2326,10 @@ function restartVoiceDetailTimeout() {
   clearTimeout(voice.detailTimer);
   voice.detailTimer = setTimeout(() => {
     if (!voice.enabled || voice.phase !== 'details') return;
+    resetVoiceDetailCollector(voice);
     resetVoiceToListening('Délai dépassé. Redis « Ajouter un but ».', 'error');
     voiceBeep('error');
-  }, 10000);
+  }, 12000);
 }
 
 function resetVoiceToListening(message='Micro actif — dis « Ajouter un but ».', kind='listening') {
@@ -2267,6 +2337,7 @@ function resetVoiceToListening(message='Micro actif — dis « Ajouter un but »
   voice.captured = null;
   clearTimeout(voice.detailTimer);
   voice.detailTimer = null;
+  resetVoiceDetailCollector(voice);
   setVoiceStatus(message, kind);
 }
 
@@ -2336,6 +2407,7 @@ function renderVoiceTestLab() {
 
   const supported = !!SpeechRecognitionCtor;
   const active = voiceTest.enabled;
+  const paused = active && !voiceTest.running && voiceTest.pauseAfterResult;
   const players = activePlayers();
   const status = active
     ? voiceTest.status
@@ -2343,6 +2415,8 @@ function renderVoiceTestLab() {
       ? 'Prêt à tester. Rien ne sera écrit dans Firebase.'
       : 'Reconnaissance vocale non disponible dans ce navigateur.';
   const kind = active ? voiceTest.statusKind : (!supported ? 'error' : 'idle');
+  const buttonLabel = paused ? 'Relancer l’écoute' : active ? 'Arrêter le test' : 'Activer le test';
+  const buttonClass = active && !paused ? 'danger' : 'primary';
 
   const results = voiceTest.results.length
     ? `<div class="voice-test-results">
@@ -2364,9 +2438,9 @@ function renderVoiceTestLab() {
         <div class="grow">
           <div class="voice-kicker">OUTIL ADMIN · TEST SEULEMENT</div>
           <h3 class="voice-title">Laboratoire de reconnaissance vocale</h3>
-          <p class="voice-help">Teste exactement le même déclencheur et la même reconnaissance de noms que pendant une partie, sans créer de but et sans modifier aucune game.</p>
+          <p class="voice-help">Teste le déclencheur et la reconnaissance des noms sans créer de but. Le labo fait maintenant <strong>un essai à la fois</strong> pour éviter les ouvertures/fermetures du micro en boucle.</p>
         </div>
-        <button type="button" class="btn ${active?'danger':'primary'} voice-toggle" data-action="toggle-voice-test" ${supported?'':'disabled'}>${active?'Arrêter le test':'Activer le test'}</button>
+        <button type="button" class="btn ${buttonClass} voice-toggle" data-action="toggle-voice-test" ${supported?'':'disabled'}>${buttonLabel}</button>
       </div>
 
       <div class="voice-test-safety">
@@ -2382,8 +2456,8 @@ function renderVoiceTestLab() {
 
       <div class="voice-test-instructions">
         <div><span>1</span><p>Dis <strong>« Ajouter un but »</strong>.</p></div>
-        <div><span>2</span><p>Après le bip : <strong>« Jonathan, assisté de Marc et Alex »</strong>.</p></div>
-        <div><span>3</span><p>Le résultat simulé apparaît ici. Aucun but n’est sauvegardé.</p></div>
+        <div><span>2</span><p>Après le bip, dis ta phrase au complet : <strong>« Jonathan, assisté de Marc et Alex »</strong>.</p></div>
+        <div><span>3</span><p>L’app attend environ 2 secondes après la dernière transcription avant d’analyser. Pour un autre essai, utilise <strong>Relancer l’écoute</strong>.</p></div>
       </div>
 
       <div class="voice-test-roster">
@@ -2402,6 +2476,19 @@ function renderVoiceTestLab() {
 
 async function toggleVoiceTest() {
   if (!isAdmin()) throw new Error('Réservé aux administrateurs.');
+
+  if (voiceTest.enabled && !voiceTest.running && voiceTest.pauseAfterResult) {
+    voiceTest.pauseAfterResult = false;
+    voiceTest.phase = 'idle';
+    voiceTest.lastTranscript = '';
+    voiceTest.detailRestarts = 0;
+    resetVoiceDetailCollector(voiceTest);
+    setVoiceTestStatus('Micro actif — dis « Ajouter un but ».', 'listening');
+    startVoiceTestRecognition();
+    render();
+    return;
+  }
+
   if (voiceTest.enabled) {
     stopVoiceTest('Laboratoire vocal désactivé.');
     return;
@@ -2420,7 +2507,10 @@ async function startVoiceTest() {
 
   voiceTest.enabled = true;
   voiceTest.phase = 'idle';
+  voiceTest.pauseAfterResult = false;
+  voiceTest.detailRestarts = 0;
   voiceTest.lastTranscript = '';
+  resetVoiceDetailCollector(voiceTest);
   setVoiceTestStatus('Micro actif — dis « Ajouter un but ».', 'listening');
 
   if (!voiceTest.recognition) {
@@ -2432,10 +2522,11 @@ async function startVoiceTest() {
 
     recognition.onstart = () => {
       voiceTest.running = true;
+      voiceTest.sessionHadTranscript = false;
       if (!voiceTest.enabled) return;
       setVoiceTestStatus(
         voiceTest.phase === 'details'
-          ? 'Commande détectée — dis le buteur puis les aides.'
+          ? 'Commande détectée — dis toute la phrase du but.'
           : 'Micro actif — dis « Ajouter un but ».',
         voiceTest.phase === 'details' ? 'waiting' : 'listening'
       );
@@ -2445,26 +2536,16 @@ async function startVoiceTest() {
       if (!voiceTest.enabled) return;
       setVoiceTestStatus(
         voiceTest.phase === 'details'
-          ? 'Micro connecté — dis le buteur puis les aides.'
+          ? 'Micro connecté — dis toute la phrase du but.'
           : 'Micro connecté — dis « Ajouter un but ».',
         voiceTest.phase === 'details' ? 'waiting' : 'listening'
       );
     };
 
-    recognition.onspeechstart = () => {
-      if (!voiceTest.enabled) return;
-      setVoiceTestStatus('Voix détectée — j’analyse…', 'waiting');
-    };
-
-    recognition.onnomatch = () => {
-      if (!voiceTest.enabled) return;
-      setVoiceTestStatus(
-        voiceTest.phase === 'details'
-          ? 'Voix entendue, mais aucune transcription exploitable. Répète les noms.'
-          : 'Voix entendue, mais aucune transcription exploitable. Redis « Ajouter un but ».',
-        'error'
-      );
-    };
+    // Ces événements réagissent parfois au bruit ambiant comme s’il s’agissait
+    // d’une voix. Seuls les vrais résultats de transcription sont affichés.
+    recognition.onspeechstart = () => {};
+    recognition.onnomatch = () => {};
 
     recognition.onresult = event => {
       handleVoiceTestRecognitionResult(event).catch(handleVoiceTestFailure);
@@ -2484,16 +2565,46 @@ async function startVoiceTest() {
         return;
       }
       if (code === 'no-speech' || code === 'aborted') return;
-      setVoiceTestStatus(`Reconnaissance vocale : ${code || 'erreur inconnue'}. Nouvelle tentative…`, 'error');
+      setVoiceTestStatus(`Reconnaissance vocale : ${code || 'erreur inconnue'}.`, 'error');
     };
 
     recognition.onend = () => {
       voiceTest.running = false;
-      if (!voiceTest.enabled) return;
-      scheduleVoiceRestart(voiceTest, startVoiceTestRecognition, setVoiceTestStatus, () => {
-        stopVoiceTest('Le navigateur ferme la reconnaissance vocale immédiatement. Recharge la page puis réessaie.', false);
+      if (!voiceTest.enabled || voiceTest.pauseAfterResult) {
         render();
-      });
+        return;
+      }
+
+      if (voiceTest.phase === 'details') {
+        const collected = getVoiceDetailText(voiceTest);
+        if (collected) {
+          scheduleVoiceTestDetailProcessing(650);
+          return;
+        }
+
+        voiceTest.detailRestarts = Number(voiceTest.detailRestarts || 0) + 1;
+        if (voiceTest.detailRestarts <= 2) {
+          clearTimeout(voiceTest.restartTimer);
+          voiceTest.restartTimer = setTimeout(() => {
+            if (voiceTest.enabled && voiceTest.phase === 'details' && !voiceTest.pauseAfterResult) {
+              startVoiceTestRecognition();
+            }
+          }, 350);
+          return;
+        }
+
+        voiceTest.pauseAfterResult = true;
+        voiceTest.phase = 'idle';
+        setVoiceTestStatus('Le navigateur a fermé le micro avant les détails. Clique « Relancer l’écoute » pour refaire un essai.', 'error');
+        render();
+        return;
+      }
+
+      // Le labo est volontairement un essai à la fois : aucune boucle infinie
+      // de redémarrage du micro lorsqu’aucune commande n’est entendue.
+      voiceTest.pauseAfterResult = true;
+      setVoiceTestStatus('Écoute terminée. Clique « Relancer l’écoute » pour un nouvel essai.', 'idle');
+      render();
     };
 
     voiceTest.recognition = recognition;
@@ -2518,19 +2629,25 @@ function startVoiceTestRecognition() {
 function stopVoiceTest(message='Laboratoire vocal désactivé.', rerender=true) {
   voiceTest.enabled = false;
   voiceTest.phase = 'idle';
+  voiceTest.pauseAfterResult = false;
+  voiceTest.detailRestarts = 0;
   voiceTest.lastTranscript = '';
   voiceTest.status = message;
   voiceTest.statusKind = 'idle';
   clearTimeout(voiceTest.detailTimer);
+  clearTimeout(voiceTest.detailProcessTimer);
   clearTimeout(voiceTest.restartTimer);
   voiceTest.detailTimer = null;
+  voiceTest.detailProcessTimer = null;
   voiceTest.restartTimer = null;
+  voiceTest.detailSegments = {};
 
   if (voiceTest.recognition) {
     try { voiceTest.recognition.abort(); } catch {}
   }
   voiceTest.startedAt = 0;
   voiceTest.rapidEnds = 0;
+  voiceTest.sessionHadTranscript = false;
   voiceTest.running = false;
   if (rerender) render();
 }
@@ -2546,43 +2663,78 @@ async function handleVoiceTestRecognitionResult(event) {
     }
     if (!alternatives.length) continue;
 
+    voiceTest.sessionHadTranscript = true;
     const primary = alternatives[0];
-    voiceTest.lastTranscript = primary;
-    updateVoiceTestHeard(primary);
+    const normalizedPrimary = normalizeSpeechText(primary);
 
     if (voiceTest.phase === 'idle') {
+      voiceTest.lastTranscript = primary;
+      updateVoiceTestHeard(primary);
+
       const triggered = alternatives
         .map(t => ({raw:t, normalized:normalizeSpeechText(t), hit:findVoiceTrigger(normalizeSpeechText(t))}))
         .find(x => x.hit);
 
       if (triggered) {
         voiceTest.phase = 'details';
-        setVoiceTestStatus('Commande « Ajouter un but » détectée — dis le buteur et les aides.', 'waiting');
+        voiceTest.detailRestarts = 0;
+        resetVoiceDetailCollector(voiceTest);
+        setVoiceTestStatus('Commande « Ajouter un but » détectée — dis toute la phrase du but.', 'waiting');
         voiceBeep('trigger');
         restartVoiceTestDetailTimeout();
 
         const remainder = triggered.normalized.slice(triggered.hit.end).trim();
-        if (result.isFinal && remainder) {
-          await processVoiceTestAlternatives([remainder]);
+        if (remainder) {
+          voiceTest.lastTranscript = remainder;
+          updateVoiceTestHeard(remainder);
+          if (result.isFinal) {
+            setVoiceDetailSegment(voiceTest, i, remainder);
+            scheduleVoiceTestDetailProcessing();
+          }
         }
         continue;
       }
     }
 
-    if (voiceTest.phase === 'details' && result.isFinal) {
-      let detailOptions = alternatives.map(normalizeSpeechText).filter(Boolean);
-      detailOptions = detailOptions.map(value => {
-        const hit = findVoiceTrigger(value);
-        return hit ? value.slice(hit.end).trim() : value;
-      }).filter(Boolean);
+    if (voiceTest.phase === 'details') {
+      const hit = findVoiceTrigger(normalizedPrimary);
+      const detailText = (hit ? normalizedPrimary.slice(hit.end) : normalizedPrimary).trim();
+      if (!detailText) continue;
 
-      if (detailOptions.length) await processVoiceTestAlternatives(detailOptions);
+      if (result.isFinal) {
+        setVoiceDetailSegment(voiceTest, i, detailText);
+        const combined = getVoiceDetailText(voiceTest);
+        voiceTest.lastTranscript = combined;
+        updateVoiceTestHeard(combined);
+        setVoiceTestStatus('J’ai les détails — j’attends la fin de ta phrase…', 'waiting');
+        scheduleVoiceTestDetailProcessing();
+      } else {
+        const committed = getVoiceDetailText(voiceTest);
+        const preview = [committed, detailText].filter(Boolean).join(' ').trim();
+        voiceTest.lastTranscript = preview;
+        updateVoiceTestHeard(preview);
+      }
     }
   }
 }
 
+function scheduleVoiceTestDetailProcessing(delay=2000) {
+  clearTimeout(voiceTest.detailProcessTimer);
+  voiceTest.detailProcessTimer = setTimeout(() => {
+    voiceTest.detailProcessTimer = null;
+    finalizeVoiceTestDetails().catch(handleVoiceTestFailure);
+  }, delay);
+}
+
+async function finalizeVoiceTestDetails() {
+  if (!voiceTest.enabled || voiceTest.phase !== 'details' || voiceTest.pauseAfterResult) return;
+  const text = getVoiceDetailText(voiceTest);
+  if (!text) return;
+  await processVoiceTestAlternatives([text]);
+}
+
 async function processVoiceTestAlternatives(options) {
-  if (!voiceTest.enabled || voiceTest.phase !== 'details') return;
+  if (!voiceTest.enabled || voiceTest.phase !== 'details' || voiceTest.pauseAfterResult) return;
 
   const parses = options
     .map(value => ({text:value, parsed:parseVoiceTestDetails(value)}))
@@ -2603,9 +2755,15 @@ async function processVoiceTestAlternatives(options) {
       at:Date.now()
     });
     voiceTest.results = voiceTest.results.slice(0,12);
-    setVoiceTestStatus(`${message} Répète les noms.`, 'error');
+    voiceTest.phase = 'idle';
+    voiceTest.pauseAfterResult = true;
+    clearTimeout(voiceTest.detailTimer);
+    resetVoiceDetailCollector(voiceTest);
+    setVoiceTestStatus(`${message} Clique « Relancer l’écoute » pour réessayer.`, 'error');
     voiceBeep('error');
-    restartVoiceTestDetailTimeout();
+    if (voiceTest.recognition && voiceTest.running) {
+      try { voiceTest.recognition.abort(); } catch {}
+    }
     render();
     return;
   }
@@ -2626,19 +2784,15 @@ async function processVoiceTestAlternatives(options) {
   voiceTest.results = voiceTest.results.slice(0,12);
   voiceTest.lastTranscript = best.text;
   voiceTest.phase = 'idle';
+  voiceTest.pauseAfterResult = true;
   clearTimeout(voiceTest.detailTimer);
-  voiceTest.detailTimer = null;
-  setVoiceTestStatus(`${summary} · rien n’a été enregistré.`, 'success');
+  resetVoiceDetailCollector(voiceTest);
+  setVoiceTestStatus(`${summary} · rien n’a été enregistré. Clique « Relancer l’écoute » pour un autre essai.`, 'success');
   voiceBeep('success');
+  if (voiceTest.recognition && voiceTest.running) {
+    try { voiceTest.recognition.abort(); } catch {}
+  }
   render();
-
-  setTimeout(() => {
-    if (voiceTest.enabled && voiceTest.phase === 'idle') {
-      voiceTest.lastTranscript = '';
-      setVoiceTestStatus('Micro actif — dis « Ajouter un but ».', 'listening');
-      updateVoiceTestHeard('');
-    }
-  }, 4500);
 }
 
 function parseVoiceTestDetails(text) {
@@ -2677,11 +2831,17 @@ function parseVoiceTestDetails(text) {
 function restartVoiceTestDetailTimeout() {
   clearTimeout(voiceTest.detailTimer);
   voiceTest.detailTimer = setTimeout(() => {
-    if (!voiceTest.enabled || voiceTest.phase !== 'details') return;
+    if (!voiceTest.enabled || voiceTest.phase !== 'details' || voiceTest.pauseAfterResult) return;
     voiceTest.phase = 'idle';
-    setVoiceTestStatus('Délai dépassé — redis « Ajouter un but ».', 'error');
+    voiceTest.pauseAfterResult = true;
+    resetVoiceDetailCollector(voiceTest);
+    setVoiceTestStatus('Délai dépassé — clique « Relancer l’écoute » pour refaire un essai.', 'error');
     voiceBeep('error');
-  }, 10000);
+    if (voiceTest.recognition && voiceTest.running) {
+      try { voiceTest.recognition.abort(); } catch {}
+    }
+    render();
+  }, 12000);
 }
 
 function setVoiceTestStatus(message, kind='idle') {

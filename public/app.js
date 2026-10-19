@@ -9,7 +9,7 @@ import {
   writeBatch, serverTimestamp, Timestamp, onSnapshot, query, orderBy, where, runTransaction, arrayUnion, arrayRemove, deleteField
 } from 'https://www.gstatic.com/firebasejs/12.19.0/firebase-firestore.js';
 
-const APP_VERSION = '8.12.0';
+const APP_VERSION = '8.14.0';
 const root = document.getElementById('app');
 const modal = document.getElementById('modal');
 const toastEl = document.getElementById('toast');
@@ -65,7 +65,6 @@ const voice = {
   enabled: false,
   running: false,
   recognition: null,
-  mediaStream: null,
   matchId: null,
   phase: 'idle',
   captured: null,
@@ -85,7 +84,6 @@ const voiceTest = {
   enabled: false,
   running: false,
   recognition: null,
-  mediaStream: null,
   phase: 'idle',
   detailTimer: null,
   restartTimer: null,
@@ -1815,7 +1813,6 @@ async function startVoiceMode() {
   if (!lineup.length) throw new Error('Ajoute d’abord les joueurs aux équipes.');
 
   await unlockAudio();
-  await keepMicrophoneOpen(voice);
   await requestWakeLock();
 
   voice.enabled = true;
@@ -1839,6 +1836,31 @@ async function startVoiceMode() {
           ? 'Je t’écoute : dis le buteur puis les aides.'
           : 'Micro actif — dis « Ajouter un but ».',
         voice.phase === 'details' ? 'waiting' : 'listening'
+      );
+    };
+
+    recognition.onaudiostart = () => {
+      if (!voice.enabled) return;
+      setVoiceStatus(
+        voice.phase === 'details'
+          ? 'Micro connecté — dis le buteur puis les aides.'
+          : 'Micro connecté — dis « Ajouter un but ».',
+        voice.phase === 'details' ? 'waiting' : 'listening'
+      );
+    };
+
+    recognition.onspeechstart = () => {
+      if (!voice.enabled) return;
+      setVoiceStatus('Voix détectée — j’analyse…', 'waiting');
+    };
+
+    recognition.onnomatch = () => {
+      if (!voice.enabled) return;
+      setVoiceStatus(
+        voice.phase === 'details'
+          ? 'J’ai entendu quelque chose, mais je n’ai pas pu le transcrire. Répète les noms.'
+          : 'J’ai entendu quelque chose, mais je n’ai pas pu le transcrire. Redis « Ajouter un but ».',
+        'error'
       );
     };
 
@@ -1907,7 +1929,6 @@ function stopVoiceMode(message='Mode vocal désactivé.', rerender=true) {
   if (voice.recognition) {
     try { voice.recognition.abort(); } catch {}
   }
-  releaseVoiceMicrophone(voice);
   voice.startedAt = 0;
   voice.rapidEnds = 0;
   voice.running = false;
@@ -2396,7 +2417,6 @@ async function startVoiceTest() {
   if (voice.enabled) stopVoiceMode('Mode vocal de match désactivé pendant le test.', false);
 
   await unlockAudio();
-  await keepMicrophoneOpen(voiceTest);
 
   voiceTest.enabled = true;
   voiceTest.phase = 'idle';
@@ -2418,6 +2438,31 @@ async function startVoiceTest() {
           ? 'Commande détectée — dis le buteur puis les aides.'
           : 'Micro actif — dis « Ajouter un but ».',
         voiceTest.phase === 'details' ? 'waiting' : 'listening'
+      );
+    };
+
+    recognition.onaudiostart = () => {
+      if (!voiceTest.enabled) return;
+      setVoiceTestStatus(
+        voiceTest.phase === 'details'
+          ? 'Micro connecté — dis le buteur puis les aides.'
+          : 'Micro connecté — dis « Ajouter un but ».',
+        voiceTest.phase === 'details' ? 'waiting' : 'listening'
+      );
+    };
+
+    recognition.onspeechstart = () => {
+      if (!voiceTest.enabled) return;
+      setVoiceTestStatus('Voix détectée — j’analyse…', 'waiting');
+    };
+
+    recognition.onnomatch = () => {
+      if (!voiceTest.enabled) return;
+      setVoiceTestStatus(
+        voiceTest.phase === 'details'
+          ? 'Voix entendue, mais aucune transcription exploitable. Répète les noms.'
+          : 'Voix entendue, mais aucune transcription exploitable. Redis « Ajouter un but ».',
+        'error'
       );
     };
 
@@ -2484,7 +2529,6 @@ function stopVoiceTest(message='Laboratoire vocal désactivé.', rerender=true) 
   if (voiceTest.recognition) {
     try { voiceTest.recognition.abort(); } catch {}
   }
-  releaseVoiceMicrophone(voiceTest);
   voiceTest.startedAt = 0;
   voiceTest.rapidEnds = 0;
   voiceTest.running = false;
@@ -2697,36 +2741,9 @@ function getRemainingSeconds(m) {
 }
 async function unlockAudio(){try{audioCtx=audioCtx||new(window.AudioContext||window.webkitAudioContext)();if(audioCtx.state==='suspended')await audioCtx.resume();}catch{}}
 
-async function keepMicrophoneOpen(holder) {
-  if (holder.mediaStream?.active) return;
-  if (!navigator.mediaDevices?.getUserMedia) return;
-  try {
-    holder.mediaStream = await navigator.mediaDevices.getUserMedia({
-      audio: {
-        echoCancellation: true,
-        noiseSuppression: true,
-        autoGainControl: true
-      }
-    });
-  } catch (err) {
-    const name = String(err?.name || '');
-    if (name === 'NotAllowedError' || name === 'SecurityError') {
-      throw new Error('Permission micro refusée. Autorise le micro puis réessaie.');
-    }
-    if (name === 'NotFoundError' || name === 'DevicesNotFoundError') {
-      throw new Error('Aucun microphone disponible.');
-    }
-    throw err;
-  }
-}
-
-function releaseVoiceMicrophone(holder) {
-  if (!holder.mediaStream) return;
-  try {
-    holder.mediaStream.getTracks().forEach(track => track.stop());
-  } catch {}
-  holder.mediaStream = null;
-}
+// SpeechRecognition acquires the microphone itself. Do not keep a parallel
+// getUserMedia() stream open: on some browsers (notably Chrome/Android),
+// that can prevent the speech service from returning transcripts.
 
 function scheduleVoiceRestart(holder, restartFn, statusFn, giveUpFn) {
   clearTimeout(holder.restartTimer);

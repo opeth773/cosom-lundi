@@ -27,7 +27,7 @@ jobs:
           deploy_log="$RUNNER_TEMP/cosom-rules-deploy.log"
           if ! npx --yes --package firebase-tools@15.34.1 firebase deploy --project cosom-8ab4f --only firestore:rules --non-interactive > "$deploy_log" 2>&1; then
             cat "$deploy_log"
-            sed -n 's/^Error: /::error title=Firestore rules deployment::/p' "$deploy_log"
+            node -e 'const fs=require("node:fs"),util=require("node:util"); const text=util.stripVTControlCharacters(fs.readFileSync(process.argv[1],"utf8")); for (const line of text.split("\n").filter(line=>/error|permission|denied|failed/i.test(line))) console.log("::error title=Firestore rules deployment::"+line.replaceAll("%","%25").replaceAll("\r","%0D"));' "$deploy_log"
             exit 1
           fi
           cat "$deploy_log"

@@ -578,7 +578,7 @@ function renderArchivedGoal(g) {
 }
 
 function renderArchivedLineups(current) {
-  let lineup = Array.isArray(current.finalLineup) && current.finalLineup.length
+  let lineup = Array.isArray(current.finalLineup)
     ? current.finalLineup
     : [...state.assignments.entries()]
         .filter(([,a])=>a.team==='dark'||a.team==='light')
@@ -611,6 +611,7 @@ function renderArchivedLineups(current) {
       <h2>Alignements</h2>
       <p class="muted">Alignements finaux de cette partie. Les positions affichées sont celles qui comptent dans les statistiques de la saison.</p>
     </div>
+    ${isAdmin() ? `<div class="card"><h3 class="card-heading">Corriger les alignements</h3><p class="muted">Admin seulement : ajoute les joueurs ou gardiens oubliés, corrige leur équipe ou leur position. Chaque changement est enregistré et recalcule les statistiques de la saison.</p>${renderAssignmentGroup('Joueurs','skater')}${renderAssignmentGroup('Gardiens','goalie')}</div>` : ''}
     <div class="archive-lineups-grid">
       ${teamCard('dark','Foncés')}
       ${teamCard('light','Pâles')}
@@ -652,9 +653,11 @@ function renderMatchSelector() {
 }
 
 function renderAssignmentGroup(title, positionGroup) {
-  const players = activePlayers()
+  const correcting = state.currentMatch?.status === 'final' && isAdmin();
+  const assignments = matchAssignments();
+  const players = (correcting ? state.players.filter(p=>playerWasActiveAtMatch(p,state.currentMatch)) : activePlayers())
     .filter(p => {
-      const assignment = state.assignments.get(p.id);
+      const assignment = assignments.get(p.id);
       const assigned = assignment?.team === 'dark' || assignment?.team === 'light';
       const responseStatus = getMatchResponseStatus(state.currentMatch, p.id);
 
@@ -666,7 +669,7 @@ function renderAssignmentGroup(title, positionGroup) {
 
       // Un remplaçant n'y apparaît que lorsqu'il a confirmé qu'il est disponible
       // pour CE match (ou s'il est déjà assigné à une équipe).
-      if (p.type === 'sub' && !assigned && responseStatus !== 'yes') return false;
+      if (!correcting && p.type === 'sub' && !assigned && responseStatus !== 'yes') return false;
 
       // Une fois assigné, on classe le joueur selon sa position pour ce match.
       // Avant l'assignation, on utilise sa position par défaut. Un remplaçant
@@ -684,7 +687,7 @@ function renderAssignmentGroup(title, positionGroup) {
 
   if (!players.length) return '';
   return `<h3 class="group-heading">${title}</h3>${players.map(p => {
-    const assignment = state.assignments.get(p.id);
+    const assignment = assignments.get(p.id);
     const team = assignment?.team || 'absent';
     const position = matchPosition(p, assignment);
     const basePosition = defaultMatchPosition(p);
@@ -699,9 +702,9 @@ function renderAssignmentGroup(title, positionGroup) {
       </div>
       <div class="assignment-actions">
         <div class="assign-buttons" aria-label="Équipe de ${escAttr(playerName(p))}">
-          <button ${matchFinal?'disabled':''} data-action="assign" data-player="${p.id}" data-team="dark" class="${team==='dark'?'on-dark':''}" title="Foncés">F</button>
-          <button ${matchFinal?'disabled':''} data-action="assign" data-player="${p.id}" data-team="light" class="${team==='light'?'on-light':''}" title="Pâles">P</button>
-          <button ${matchFinal?'disabled':''} data-action="assign" data-player="${p.id}" data-team="absent" class="${team==='absent'?'on-absent':''}" title="Absent / non appelé">—</button>
+          <button ${positionLocked?'disabled':''} data-action="assign" data-player="${p.id}" data-team="dark" class="${team==='dark'?'on-dark':''}" title="Foncés">F</button>
+          <button ${positionLocked?'disabled':''} data-action="assign" data-player="${p.id}" data-team="light" class="${team==='light'?'on-light':''}" title="Pâles">P</button>
+          <button ${positionLocked?'disabled':''} data-action="assign" data-player="${p.id}" data-team="absent" class="${team==='absent'?'on-absent':''}" title="Absent / non appelé">—</button>
         </div>
         ${team!=='absent' ? `
           <div class="match-position-control">
@@ -1129,7 +1132,7 @@ async function loadStats() {
     for (const m of finals) {
       const gSnap = await getDocs(collection(state.db,'leagues',state.leagueId,'matches',m.id,'goals'));
       let assignments;
-      if (Array.isArray(m.finalLineup) && m.finalLineup.length) {
+      if (Array.isArray(m.finalLineup)) {
         assignments = new Map(m.finalLineup.map(a=>[a.playerId,a]));
       } else {
         const aSnap = await getDocs(collection(state.db,'leagues',state.leagueId,'matches',m.id,'assignments'));
@@ -1478,7 +1481,12 @@ async function savePlayer(fd,id) {
 }
 
 async function setAssignment(playerId,team) {
-  if(!state.currentMatch || state.currentMatch.status==='final') return;
+  if(!state.currentMatch) return;
+  if(!['dark','light','absent'].includes(team)) throw new Error('Équipe invalide.');
+  if(state.currentMatch.status==='final') {
+    if(!isAdmin()) return;
+    return correctFinalAssignment(playerId,{team});
+  }
   const ref=doc(state.db,'leagues',state.leagueId,'matches',state.currentMatch.id,'assignments',playerId);
   if(team==='absent') {
     await deleteDoc(ref).catch(()=>{});
@@ -1495,19 +1503,14 @@ async function setMatchPosition(playerId,position) {
   if(!state.currentMatch) return;
   if(state.currentMatch.status==='final' && !isAdmin()) return;
   if(!['skater','goalie'].includes(position)) throw new Error('Position invalide.');
-  const assignment=state.assignments.get(playerId);
+  const assignment=matchAssignments().get(playerId);
   if(!assignment || !['dark','light'].includes(assignment.team)) throw new Error('Assigne d’abord ce joueur à une équipe.');
+
+  if(state.currentMatch.status==='final') return correctFinalAssignment(playerId,{position});
 
   await setDoc(doc(state.db,'leagues',state.leagueId,'matches',state.currentMatch.id,'assignments',playerId),{
     playerId,team:assignment.team,position,updatedAt:serverTimestamp(),updatedBy:state.user.uid
   },{merge:true});
-
-  if(state.currentMatch.status==='final' && isAdmin()) {
-    const finalLineup = buildFinalLineup(playerId, position);
-    await updateDoc(matchRef(),{finalLineup,updatedAt:serverTimestamp()});
-    state.currentMatch = {...state.currentMatch,finalLineup};
-    state.matches = state.matches.map(m=>m.id===state.currentMatch.id?{...m,finalLineup}:m);
-  }
 
   state.stats=null;
   toast(position==='goalie'?'Position : gardien pour ce match.':'Position : joueur pour ce match.');
@@ -2952,14 +2955,43 @@ function defaultMatchPosition(p){
   return 'skater';
 }
 function matchPosition(p,assignment){return assignment?.position==='goalie'||assignment?.position==='skater'?assignment.position:defaultMatchPosition(p);}
-function buildFinalLineup(overridePlayerId=null,overridePosition=null){
-  return [...state.assignments.entries()]
-    .filter(([,a])=>a.team==='dark'||a.team==='light')
-    .map(([playerId,a])=>({
-      playerId,
-      team:a.team,
-      position:playerId===overridePlayerId?overridePosition:matchPosition(findPlayer(playerId),a)
-    }));
+function matchAssignments() {
+  const lineup=state.currentMatch?.finalLineup;
+  return state.currentMatch?.status==='final' && Array.isArray(lineup)
+    ? new Map(lineup.map(a=>[a.playerId,a])) : state.assignments;
+}
+
+async function correctFinalAssignment(playerId,change) {
+  if(!isAdmin() || state.currentMatch?.status!=='final') return;
+  const player=findPlayer(playerId);
+  if(!player) throw new Error('Joueur introuvable.');
+  const matchId=state.currentMatch.id;
+  const ref=matchRef();
+  const assignmentRef=doc(state.db,'leagues',state.leagueId,'matches',matchId,'assignments',playerId);
+  const fallback=[...state.assignments.entries()].map(([id,a])=>({...a,playerId:id}));
+  await runTransaction(state.db,async tx=>{
+    const snap=await tx.get(ref);
+    if(!snap.exists() || snap.data().status!=='final') throw new Error('Le match doit être terminé.');
+    const assignments=new Map((Array.isArray(snap.data().finalLineup)?snap.data().finalLineup:fallback).map(a=>[a.playerId,a]));
+    const previous=assignments.get(playerId);
+    const team=change.team ?? previous?.team;
+    const position=change.position ?? matchPosition(player,previous);
+    if(team==='absent') {
+      assignments.delete(playerId);
+      tx.delete(assignmentRef);
+    } else {
+      if(!['dark','light'].includes(team)) throw new Error('Assigne d’abord ce joueur à une équipe.');
+      const assignment={playerId,team,position};
+      assignments.set(playerId,assignment);
+      tx.set(assignmentRef,{...assignment,updatedAt:serverTimestamp(),updatedBy:state.user.uid},{merge:true});
+    }
+    const finalLineup=[...assignments.values()]
+      .filter(a=>a.team==='dark'||a.team==='light')
+      .map(a=>({playerId:a.playerId,team:a.team,position:matchPosition(findPlayer(a.playerId),a)}));
+    tx.update(ref,{finalLineup,updatedAt:serverTimestamp()});
+  });
+  state.stats=null;
+  toast('Alignement corrigé. Les statistiques seront recalculées.');
 }
 function goalClockRemainingSeconds(goal,match){
   const periodSeconds=Number(match?.periodSeconds||state.league?.settings?.periodMinutes*60||1200);

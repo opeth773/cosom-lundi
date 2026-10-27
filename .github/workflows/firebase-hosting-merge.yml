@@ -11,6 +11,20 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Test final lineup corrections
+        run: node --test tests/final-lineups.test.cjs
+      - name: Deploy Firestore rules
+        env:
+          FIREBASE_SERVICE_ACCOUNT: ${{ secrets.FIREBASE_SERVICE_ACCOUNT_COSOM_8AB4F }}
+        run: |
+          credential_file="$(mktemp "$RUNNER_TEMP/cosom-firebase-XXXXXX.json")"
+          trap 'rm -f "$credential_file"' EXIT
+          export GOOGLE_APPLICATION_CREDENTIALS="$credential_file"
+          node -e 'require("node:fs").writeFileSync(process.env.GOOGLE_APPLICATION_CREDENTIALS, process.env.FIREBASE_SERVICE_ACCOUNT, {mode: 0o600})'
+          npx --yes --package firebase-tools@15.34.1 firebase deploy --project cosom-8ab4f --only firestore:rules --non-interactive
       - uses: FirebaseExtended/action-hosting-deploy@v0
         with:
           repoToken: ${{ secrets.GITHUB_TOKEN }}

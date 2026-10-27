@@ -17,3 +17,20 @@ Cette version inclut notamment : Google Sign-In avec courriel/mot de passe en so
 ## Calendrier administrateur (v6)
 
 Dans **Calendrier**, un administrateur peut ajouter un match manuel à n'importe quelle date et supprimer un match futur. Si un lundi généré automatiquement est supprimé, l'application conserve cette date comme lundi annulé afin de ne pas le recréer automatiquement. Recréer manuellement un match ce lundi réactive la date.
+
+## Corriger les alignements après une partie
+
+Un administrateur peut ouvrir une partie terminée, puis **Alignements**, pour ajouter
+un joueur ou gardien oublié, changer son équipe (Foncés/Pâles), sa position ou le
+retirer de l'alignement. Les changements sont enregistrés immédiatement et les
+statistiques de saison sont recalculées à partir de l'alignement corrigé. Les
+comptes normaux conservent un affichage en lecture seule pour les alignements finaux.
+
+Le workflow GitHub teste ces corrections et déploie `firestore.rules` avant le
+site Hosting. Pour un déploiement manuel avec les droits Firebase appropriés,
+utiliser `firebase deploy --project cosom-8ab4f --only hosting:app,firestore:rules`.
+
+Tests de régression locaux (Node.js, sans dépendances supplémentaires) :
+`node --test tests/final-lineups.test.cjs`. Ils vérifient les corrections et les
+statistiques avec Firebase simulé; ils ne remplacent pas un test des règles dans
+l'émulateur Firestore.

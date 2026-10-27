@@ -130,10 +130,15 @@ service cloud.firestore {
       match /matches/{matchId} {
         allow read: if isMember(leagueId);
         allow create, delete: if isAdmin(leagueId);
-        allow update: if isMember(leagueId);
+        allow update: if isMember(leagueId)
+          && (isAdmin(leagueId) || resource.data.status != 'final');
 
         match /assignments/{playerId} {
-          allow read, write: if isMember(leagueId);
+          allow read: if isMember(leagueId);
+          allow write: if isMember(leagueId) && (
+            isAdmin(leagueId) ||
+            get(/databases/$(database)/documents/leagues/$(leagueId)/matches/$(matchId)).data.status != 'final'
+          );
         }
         match /goals/{goalId} {
           allow read, write: if isMember(leagueId);

@@ -29,6 +29,10 @@ comptes normaux conservent un affichage en lecture seule pour les alignements fi
 Le workflow GitHub teste ces corrections et déploie `firestore.rules` avant le
 site Hosting. Pour un déploiement manuel avec les droits Firebase appropriés,
 utiliser `firebase deploy --project cosom-8ab4f --only hosting:app,firestore:rules`.
+Le compte de service GitHub doit disposer du rôle **Firebase Rules Admin**
+(`roles/firebaserules.admin`) en plus de ses droits Hosting. Son adresse figure
+dans l'annotation « Firebase deployment account » du workflow. Un échec du
+déploiement des règles bloque la publication du site.
 
 Tests de régression locaux (Node.js, sans dépendances supplémentaires) :
 `node --test tests/final-lineups.test.cjs`. Ils vérifient les corrections et les

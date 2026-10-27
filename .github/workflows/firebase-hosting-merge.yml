@@ -24,7 +24,13 @@ jobs:
           trap 'rm -f "$credential_file"' EXIT
           export GOOGLE_APPLICATION_CREDENTIALS="$credential_file"
           node -e 'require("node:fs").writeFileSync(process.env.GOOGLE_APPLICATION_CREDENTIALS, process.env.FIREBASE_SERVICE_ACCOUNT, {mode: 0o600})'
-          npx --yes --package firebase-tools@15.34.1 firebase deploy --project cosom-8ab4f --only firestore:rules --non-interactive
+          deploy_log="$RUNNER_TEMP/cosom-rules-deploy.log"
+          if ! npx --yes --package firebase-tools@15.34.1 firebase deploy --project cosom-8ab4f --only firestore:rules --non-interactive > "$deploy_log" 2>&1; then
+            cat "$deploy_log"
+            sed -n 's/^Error: /::error title=Firestore rules deployment::/p' "$deploy_log"
+            exit 1
+          fi
+          cat "$deploy_log"
       - uses: FirebaseExtended/action-hosting-deploy@v0
         with:
           repoToken: ${{ secrets.GITHUB_TOKEN }}

@@ -1175,7 +1175,7 @@ async function loadStats() {
 root.addEventListener('click', async e => {
   const tab = e.target.closest('[data-tab]')?.dataset.tab;
   if (tab) {
-    if (voiceTest.enabled && tab !== 'settings') stopVoiceTest('Laboratoire vocal désactivé.', false);
+    if (voiceTest.enabled && tab !== 'settings' && !window.CosomAndroid) stopVoiceTest('Laboratoire vocal désactivé.', false);
     state.tab=tab;
     render();
     return;
@@ -1847,6 +1847,7 @@ async function startVoiceMode() {
     recognition.interimResults = true;
     recognition.maxAlternatives = 3;
 
+    recognition.onloading = () => setVoiceStatus('Préparation du moteur vocal français…', 'waiting');
     recognition.onstart = () => {
       voice.running = true;
       voice.sessionHadTranscript = false;
@@ -2421,7 +2422,6 @@ function renderVoiceTestLab() {
 
   const supported = !!SpeechRecognitionCtor;
   const active = voiceTest.enabled;
-  const paused = active && !voiceTest.running && voiceTest.pauseAfterResult;
   const players = activePlayers();
   const status = active
     ? voiceTest.status
@@ -2429,8 +2429,8 @@ function renderVoiceTestLab() {
       ? 'Prêt à tester. Rien ne sera écrit dans Firebase.'
       : 'Reconnaissance vocale non disponible dans ce navigateur.';
   const kind = active ? voiceTest.statusKind : (!supported ? 'error' : 'idle');
-  const buttonLabel = paused ? 'Relancer l’écoute' : active ? 'Arrêter le test' : 'Activer le test';
-  const buttonClass = active && !paused ? 'danger' : 'primary';
+  const buttonLabel = active ? 'Arrêter le test' : 'Activer le test';
+  const buttonClass = active ? 'danger' : 'primary';
 
   const results = voiceTest.results.length
     ? `<div class="voice-test-results">
@@ -2452,7 +2452,7 @@ function renderVoiceTestLab() {
         <div class="grow">
           <div class="voice-kicker">OUTIL ADMIN · TEST SEULEMENT</div>
           <h3 class="voice-title">Laboratoire de reconnaissance vocale</h3>
-          <p class="voice-help">Teste le déclencheur et la reconnaissance des noms sans créer de but. Le labo fait maintenant <strong>un essai à la fois</strong> pour éviter les ouvertures/fermetures du micro en boucle.</p>
+          <p class="voice-help">Teste le déclencheur et la reconnaissance des noms sans créer de but. Le micro reste ouvert pendant les silences et entre les essais. Dis <strong>« arrête le test »</strong> ou utilise le bouton pour terminer.</p>
         </div>
         <button type="button" class="btn ${buttonClass} voice-toggle" data-action="toggle-voice-test" ${supported?'':'disabled'}>${buttonLabel}</button>
       </div>
@@ -2471,7 +2471,7 @@ function renderVoiceTestLab() {
       <div class="voice-test-instructions">
         <div><span>1</span><p>Dis <strong>« Ajouter un but »</strong>.</p></div>
         <div><span>2</span><p>Après le bip, dis ta phrase au complet : <strong>« Jonathan, assisté de Marc et Alex »</strong>.</p></div>
-        <div><span>3</span><p>L’app attend environ 2 secondes après la dernière transcription avant d’analyser. Pour un autre essai, utilise <strong>Relancer l’écoute</strong>.</p></div>
+        <div><span>3</span><p>L’app attend environ 2 secondes après la dernière transcription avant d’analyser. Après chaque essai, dis à nouveau <strong>« Ajouter un but »</strong>. Le micro reste ouvert.</p></div>
       </div>
 
       <div class="voice-test-roster">
@@ -2490,18 +2490,6 @@ function renderVoiceTestLab() {
 
 async function toggleVoiceTest() {
   if (!isAdmin()) throw new Error('Réservé aux administrateurs.');
-
-  if (voiceTest.enabled && !voiceTest.running && voiceTest.pauseAfterResult) {
-    voiceTest.pauseAfterResult = false;
-    voiceTest.phase = 'idle';
-    voiceTest.lastTranscript = '';
-    voiceTest.detailRestarts = 0;
-    resetVoiceDetailCollector(voiceTest);
-    setVoiceTestStatus('Micro actif — dis « Ajouter un but ».', 'listening');
-    startVoiceTestRecognition();
-    render();
-    return;
-  }
 
   if (voiceTest.enabled) {
     stopVoiceTest('Laboratoire vocal désactivé.');
@@ -2587,49 +2575,12 @@ async function startVoiceTest() {
       setVoiceTestStatus(`Reconnaissance vocale : ${code || 'erreur inconnue'}.`, 'error');
     };
 
+    recognition.onloading = () => {
+      setVoiceTestStatus('Préparation du moteur vocal français… Le premier démarrage peut prendre quelques secondes.', 'waiting');
+    };
     recognition.onend = () => {
       voiceTest.running = false;
-      if (!voiceTest.enabled || voiceTest.pauseAfterResult) {
-        render();
-        return;
-      }
-
-      if (voiceTest.phase === 'details') {
-        const collected = getVoiceDetailText(voiceTest);
-        if (collected) {
-          scheduleVoiceTestDetailProcessing(650);
-          return;
-        }
-
-        voiceTest.detailRestarts = Number(voiceTest.detailRestarts || 0) + 1;
-        if (voiceTest.detailRestarts <= 2) {
-          clearTimeout(voiceTest.restartTimer);
-          voiceTest.restartTimer = setTimeout(() => {
-            if (voiceTest.enabled && voiceTest.phase === 'details' && !voiceTest.pauseAfterResult) {
-              startVoiceTestRecognition();
-            }
-          }, 350);
-          return;
-        }
-
-        voiceTest.pauseAfterResult = true;
-        voiceTest.phase = 'idle';
-        setVoiceTestStatus('Le navigateur a fermé le micro avant les détails. Clique « Relancer l’écoute » pour refaire un essai.', 'error');
-        render();
-        return;
-      }
-
-      if (window.CosomAndroid) {
-        scheduleVoiceRestart(voiceTest, startVoiceTestRecognition, setVoiceTestStatus, () => {
-          stopVoiceTest('Le service vocal Android ne répond pas. Vérifie la connexion et le service vocal du téléphone.', true);
-        });
-        return;
-      }
-
-      // Le labo est volontairement un essai à la fois : aucune boucle infinie
-      // de redémarrage du micro lorsqu’aucune commande n’est entendue.
-      voiceTest.pauseAfterResult = true;
-      setVoiceTestStatus('Écoute terminée. Clique « Relancer l’écoute » pour un nouvel essai.', 'idle');
+      if (voiceTest.enabled) setVoiceTestStatus('Le micro a été interrompu. Arrête puis réactive le test pour le reprendre.', 'error');
       render();
     };
 
@@ -2688,6 +2639,11 @@ async function handleVoiceTestRecognitionResult(event) {
       if (result[j]?.transcript) alternatives.push(String(result[j].transcript).trim());
     }
     if (!alternatives.length) continue;
+    if (result.isFinal && alternatives.some(isVoiceTestStopCommand)) {
+      stopVoiceTest('Test arrêté à ta demande.');
+      return;
+    }
+
 
     voiceTest.sessionHadTranscript = true;
     const primary = alternatives[0];
@@ -2782,14 +2738,11 @@ async function processVoiceTestAlternatives(options) {
     });
     voiceTest.results = voiceTest.results.slice(0,12);
     voiceTest.phase = 'idle';
-    voiceTest.pauseAfterResult = true;
+    voiceTest.pauseAfterResult = false;
     clearTimeout(voiceTest.detailTimer);
     resetVoiceDetailCollector(voiceTest);
-    setVoiceTestStatus(`${message} Clique « Relancer l’écoute » pour réessayer.`, 'error');
+    setVoiceTestStatus(`${message} Je continue à écouter : dis « Ajouter un but » pour réessayer.`, 'error');
     voiceBeep('error');
-    if (voiceTest.recognition && voiceTest.running) {
-      try { voiceTest.recognition.abort(); } catch {}
-    }
     render();
     return;
   }
@@ -2810,14 +2763,11 @@ async function processVoiceTestAlternatives(options) {
   voiceTest.results = voiceTest.results.slice(0,12);
   voiceTest.lastTranscript = best.text;
   voiceTest.phase = 'idle';
-  voiceTest.pauseAfterResult = true;
+  voiceTest.pauseAfterResult = false;
   clearTimeout(voiceTest.detailTimer);
   resetVoiceDetailCollector(voiceTest);
-  setVoiceTestStatus(`${summary} · rien n’a été enregistré. Clique « Relancer l’écoute » pour un autre essai.`, 'success');
+  setVoiceTestStatus(`${summary} · rien n’a été enregistré. Écoute continue : dis « Ajouter un but » pour un autre essai.`, 'success');
   voiceBeep('success');
-  if (voiceTest.recognition && voiceTest.running) {
-    try { voiceTest.recognition.abort(); } catch {}
-  }
   render();
 }
 
@@ -2856,18 +2806,12 @@ function parseVoiceTestDetails(text) {
 
 function restartVoiceTestDetailTimeout() {
   clearTimeout(voiceTest.detailTimer);
-  voiceTest.detailTimer = setTimeout(() => {
-    if (!voiceTest.enabled || voiceTest.phase !== 'details' || voiceTest.pauseAfterResult) return;
-    voiceTest.phase = 'idle';
-    voiceTest.pauseAfterResult = true;
-    resetVoiceDetailCollector(voiceTest);
-    setVoiceTestStatus('Délai dépassé — clique « Relancer l’écoute » pour refaire un essai.', 'error');
-    voiceBeep('error');
-    if (voiceTest.recognition && voiceTest.running) {
-      try { voiceTest.recognition.abort(); } catch {}
-    }
-    render();
-  }, 12000);
+  voiceTest.detailTimer = null;
+  // Waiting for goal details is not a reason to close or reset the microphone.
+}
+
+function isVoiceTestStopCommand(text) {
+  return /^(?:arrete|arreter|stop)(?: le)? (?:test|micro|mode vocal)$|^(?:arrete|arreter) l ecoute$/.test(normalizeSpeechText(text));
 }
 
 function setVoiceTestStatus(message, kind='idle') {

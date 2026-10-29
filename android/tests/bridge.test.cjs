@@ -104,29 +104,69 @@ test('Android project never references the PWA directory as a build input', () =
   assert.doesNotMatch(gradle, /public\//);
 });
 
-test('Android admin lab resumes unexpected ends while preserving explicit pause and permission denial', async () => {
+test('lab does not restart a recorder when an unexpected end is reported', async () => {
   const source=fs.readFileSync(path.join(__dirname,'../web/app.js'),'utf8');
   const start=source.indexOf('async function startVoiceTest()');
   const code=source.slice(start,source.indexOf('\nfunction startVoiceTestRecognition',start));
-  let restarts=0;
+  let starts=0;
   const voiceTest={enabled:false,recognition:null};
   const ctx=vm.createContext({window:{CosomAndroid:{}},voiceTest,voice:{enabled:false},
     isAdmin:()=>true,activePlayers:()=>[{}],unlockAudio:async()=>{},resetVoiceDetailCollector:()=>{},
     setVoiceTestStatus:()=>{},render:()=>{},SpeechRecognitionCtor:function(){},
-    startVoiceTestRecognition:()=>restarts++,
-    stopVoiceTest:()=>{voiceTest.enabled=false;},
-    scheduleVoiceRestart:(holder,start)=>start()});
+    startVoiceTestRecognition:()=>starts++,
+    stopVoiceTest:()=>{voiceTest.enabled=false;}});
   vm.runInContext(code,ctx);
   await ctx.startVoiceTest();
-  assert.equal(restarts,1);
-  voiceTest.recognition.onend();
-  assert.equal(restarts,2);
+  for(let i=0;i<10;i++)voiceTest.recognition.onend();
+  assert.equal(starts,1);
+  assert.equal(voiceTest.enabled,true);
   assert.equal(voiceTest.pauseAfterResult,false);
-  voiceTest.pauseAfterResult=true;
-  voiceTest.recognition.onend();
-  assert.equal(restarts,2);
-  voiceTest.pauseAfterResult=false;
-  voiceTest.recognition.onerror({error:'not-allowed'});
-  voiceTest.recognition.onend();
-  assert.equal(restarts,2);
+});
+
+function labContext(parsed) {
+  const source=fs.readFileSync(path.join(__dirname,'../web/app.js'),'utf8');
+  const voiceTest={enabled:true,phase:'details',pauseAfterResult:false,results:[],running:true,
+    recognition:{abort(){throw new Error('Microphone must stay open');}}};
+  const ctx=vm.createContext({voiceTest,Date,clearTimeout:()=>{},resetVoiceDetailCollector:()=>{},
+    parseVoiceTestDetails:()=>parsed,updateVoiceTestHeard:()=>{},setVoiceTestStatus:()=>{},
+    voiceBeep:()=>{},render:()=>{},playerName:p=>p?.name||'',findPlayer:()=>({name:'Marc'})});
+  const a=source.indexOf('async function processVoiceTestAlternatives(');
+  vm.runInContext(source.slice(a,source.indexOf('\nfunction parseVoiceTestDetails',a)),ctx);
+  return {ctx,voiceTest,source};
+}
+
+test('successful simulations keep listening, including repeated goals', async () => {
+  const {ctx,voiceTest}=labContext({ok:true,scorer:{name:'Marc'},assists:[],confidence:1});
+  for(let i=0;i<20;i++) {
+    voiceTest.phase='details';
+    await ctx.processVoiceTestAlternatives(['Marc sans aide']);
+    assert.equal(voiceTest.pauseAfterResult,false);
+    assert.equal(voiceTest.enabled,true);
+    assert.equal(voiceTest.running,true);
+  }
+});
+test('unrecognized player does not close the microphone', async () => {
+  const {ctx,voiceTest}=labContext({ok:false,message:'Joueur non reconnu'});
+  await ctx.processVoiceTestAlternatives(['un nom inconnu']);
+  assert.equal(voiceTest.pauseAfterResult,false);
+  assert.equal(voiceTest.enabled,true);
+  assert.equal(voiceTest.phase,'idle');
+});
+test('waiting for goal details installs no inactivity timeout', () => {
+  const {ctx,voiceTest,source}=labContext({});
+  const a=source.indexOf('function restartVoiceTestDetailTimeout()');
+  vm.runInContext(source.slice(a,source.indexOf('\nfunction isVoiceTestStopCommand',a)),ctx);
+  voiceTest.detailTimer=99;
+  ctx.restartVoiceTestDetailTimeout();
+  assert.equal(voiceTest.detailTimer,null);
+});
+test('spoken stop commands are explicit and do not match scoring phrases', () => {
+  const {ctx,source}=labContext({});
+  for(const name of ['normalizeSpeechText','isVoiceTestStopCommand']) {
+    const a=source.indexOf('function '+name+'(');
+    const b=source.indexOf('\n}',a)+2;
+    vm.runInContext(source.slice(a,b),ctx);
+  }
+  for(const text of ['arrête le test','arrêter le micro',"arrête l’écoute",'stop le test'])assert.equal(ctx.isVoiceTestStopCommand(text),true,text);
+  for(const text of ['ajouter un but','Marc sans aide','arrêt du gardien'])assert.equal(ctx.isVoiceTestStopCommand(text),false,text);
 });

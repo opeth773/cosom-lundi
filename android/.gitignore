@@ -5,3 +5,5 @@ signing.properties
 *.jks
 *.keystore
 *.p12
+
+model-assets/

@@ -32,6 +32,9 @@ jobs:
         id: tests
         working-directory: android
         run: node --test tests/*.test.cjs
+      - name: Prepare checksum-verified French model
+        id: voice_model
+        run: python3 android/tools/prepare_voice_model.py
       - name: Compile and lint Android
         id: build
         working-directory: android
@@ -46,12 +49,12 @@ jobs:
         working-directory: android/releases
         run: sha256sum --check SHA256SUMS
       - name: Verify installable APK signature
-        run: "$ANDROID_HOME/build-tools/35.0.0/apksigner verify --verbose --print-certs android/releases/Cosom-Android-1.0.0-preview.2.apk"
+        run: "$ANDROID_HOME/build-tools/35.0.0/apksigner verify --verbose --print-certs android/releases/Cosom-Android-1.0.0-preview.3.apk"
       - uses: actions/upload-artifact@v4
         with:
           name: Cosom-Android-preview
           path: |
-            android/releases/Cosom-Android-1.0.0-preview.2.apk
+            android/releases/Cosom-Android-1.0.0-preview.3.apk
             android/releases/SHA256SUMS
             android/signing-certificate.txt
           if-no-files-found: error
@@ -71,15 +74,15 @@ jobs:
       - uses: actions/checkout@v5
       - uses: softprops/action-gh-release@v2
         with:
-          name: Cosom Android 1.0.0 — preview 2
+          name: Cosom Android 1.0.0 — preview 3
           prerelease: true
           fail_on_unmatched_files: true
           body: |
-            Correction Android de la reprise du microphone après une phrase ou un silence.
-            Les événements tardifs d'une ancienne session ne ferment plus la nouvelle ; les erreurs vocales transitoires sont réessayées.
-            Le laboratoire reprend les interruptions sans résultat. Une simulation terminée reste volontairement en pause.
-            Installer cette mise à jour par-dessus la précédente : même package, même certificat, code de version 2. Ne pas désinstaller.
-            Aucun changement à la PWA. Comportement vocal réel à confirmer sur le téléphone.
+            Remplace les sessions de dictée Android par une capture AudioRecord continue et un moteur Vosk français local.
+            Le micro ne redémarre pas entre les phrases ou pendant le silence. Aucun son de démarrage de Google SpeechRecognizer.
+            Le laboratoire ne se met plus en pause après un résultat ou un délai. Arrêt par le bouton ou « arrête le test » ; arrêt du micro en arrière-plan.
+            APK plus grosse : modèle français embarqué. Reconnaissance des noms et fonctionnement au gym à confirmer sur téléphone.
+            Installer par-dessus la précédente, sans désinstaller : même package et même signature, code de version 3. PWA inchangée.
           files: |
             android/releases/*.apk
             android/releases/SHA256SUMS

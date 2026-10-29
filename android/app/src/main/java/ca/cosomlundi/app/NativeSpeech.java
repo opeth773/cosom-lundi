@@ -1,193 +1,141 @@
 package ca.cosomlundi.app;
 
 import android.Manifest;
-import android.content.Intent;
 import android.content.pm.PackageManager;
-import android.os.Bundle;
-import android.os.Handler;
-import android.os.Looper;
-import android.speech.RecognitionListener;
-import android.speech.RecognizerIntent;
-import android.speech.SpeechRecognizer;
 import org.json.JSONArray;
 import org.json.JSONObject;
-import java.util.ArrayList;
 
-/** Foreground microphone only; one recognizer owns the microphone at a time. */
+/** One continuous recorder. No Android dictation sessions and no restart timer. */
 final class NativeSpeech {
     static final int MICROPHONE_REQUEST = 40;
+    interface Listener {
+        void ready();
+        void transcript(String json, boolean isFinal);
+        void error(String message);
+    }
+    interface Engine {
+        void start(Listener listener);
+        void close();
+    }
+    interface Prepared {
+        void ready(Engine engine);
+        void error(String message);
+    }
+    interface Factory {
+        void prepare(Prepared callback);
+        void close();
+    }
     private final MainActivity activity;
-    private final Handler handler = new Handler(Looper.getMainLooper());
-    private SpeechRecognizer engine;
-    private JSONObject config;
+    private final Factory factory;
+    private Engine engine;
     private String id;
     private int generation;
-    private int silenceCount;
-    private boolean continuous;
-    private boolean stopping;
-    private boolean started;
-    private int recoveryCount;
     private boolean awaitingPermission;
     private boolean resumeAfterPermission;
+    private String lastPartial = "";
 
-    NativeSpeech(MainActivity activity) { this.activity = activity; }
+    NativeSpeech(MainActivity activity) { this(activity, new OfflineVoiceEngine(activity)); }
+    NativeSpeech(MainActivity activity, Factory factory) { this.activity = activity; this.factory = factory; }
 
     void start(JSONObject options) {
         abort();
         id = options.optString("id");
-        config = options;
-        continuous = options.optBoolean("continuous");
-        stopping = false;
-        started = false;
-        recoveryCount = 0;
-        silenceCount = 0;
-        if (!SpeechRecognizer.isRecognitionAvailable(activity)) {
-            fail("service-not-allowed", "Installe ou active le service vocal Google dans les paramètres Android.");
-            return;
-        }
+        lastPartial = "";
         if (activity.checkSelfPermission(Manifest.permission.RECORD_AUDIO) != PackageManager.PERMISSION_GRANTED) {
             awaitingPermission = true;
             activity.requestPermissions(new String[]{Manifest.permission.RECORD_AUDIO}, MICROPHONE_REQUEST);
-        } else begin(true);
+        } else prepare();
     }
-
     void permissionResult(boolean granted) {
         awaitingPermission = false;
         if (id == null) return;
         if (!granted) { fail("not-allowed", "Permission microphone refusée."); return; }
-        if (activity.isForeground()) begin(true); else resumeAfterPermission = true;
+        if (activity.isForeground()) prepare(); else resumeAfterPermission = true;
     }
-
     boolean awaitingPermission() { return awaitingPermission; }
     void onResume() {
-        if (resumeAfterPermission && id != null) { resumeAfterPermission = false; begin(true); }
+        if (resumeAfterPermission && id != null) { resumeAfterPermission = false; prepare(); }
     }
-
-    private void begin(boolean first) {
+    private void prepare() {
         if (id == null || !activity.isForeground()) { abort(); return; }
         final int token = ++generation;
-        destroyEngine();
-        try {
-            engine = SpeechRecognizer.createSpeechRecognizer(activity);
-            engine.setRecognitionListener(new RecognitionListener() {
-                private boolean current() { return id != null && token == generation; }
-                @Override public void onReadyForSpeech(Bundle params) {
-                    if (!current()) return;
-                    if (!started) { started = true; emit("start"); }
-                    emit("audiostart");
-                }
-                @Override public void onBeginningOfSpeech() { if (current()) emit("speechstart"); }
-                @Override public void onRmsChanged(float rms) {}
-                @Override public void onBufferReceived(byte[] buffer) {}
-                @Override public void onEndOfSpeech() { if (current()) emit("speechend"); }
-                @Override public void onPartialResults(Bundle results) { if (current()) result(results, false); }
-                @Override public void onEvent(int eventType, Bundle params) {}
-                @Override public void onResults(Bundle results) {
-                    if (!current()) return;
-                    result(results, true);
-                    silenceCount = 0;
-                    recoveryCount = 0;
-                    next(token, 350);
-                }
-                @Override public void onError(int error) {
-                    if (!current()) return;
-                    if (!stopping && continuous && (error == SpeechRecognizer.ERROR_NO_MATCH || error == SpeechRecognizer.ERROR_SPEECH_TIMEOUT)) {
-                        next(token, Math.min(3000, 500 + ++silenceCount * 250));
-                        return;
+        emit("loading");
+        factory.prepare(new Prepared() {
+            private boolean current() { return id != null && token == generation; }
+            @Override public void ready(Engine prepared) {
+                if (!current() || !activity.isForeground()) { prepared.close(); return; }
+                engine = prepared;
+                engine.start(new Listener() {
+                    @Override public void ready() {
+                        if (current()) { emit("start"); emit("audiostart"); }
                     }
-                    if (stopping) { end(); return; }
-                    if (continuous && (error == SpeechRecognizer.ERROR_CLIENT
-                            || error == SpeechRecognizer.ERROR_RECOGNIZER_BUSY
-                            || error == SpeechRecognizer.ERROR_SERVER_DISCONNECTED
-                            || error == SpeechRecognizer.ERROR_NETWORK
-                            || error == SpeechRecognizer.ERROR_NETWORK_TIMEOUT
-                            || error == SpeechRecognizer.ERROR_SERVER
-                            || error == SpeechRecognizer.ERROR_TOO_MANY_REQUESTS) && ++recoveryCount <= 4) {
-                        next(token, Math.min(8000, recoveryCount * 1000));
-                        return;
+                    @Override public void transcript(String json, boolean isFinal) {
+                        if (current()) result(json, isFinal);
                     }
-                    String code = switch (error) {
-                        case SpeechRecognizer.ERROR_INSUFFICIENT_PERMISSIONS -> "not-allowed";
-                        case SpeechRecognizer.ERROR_AUDIO -> "audio-capture";
-                        case SpeechRecognizer.ERROR_NETWORK, SpeechRecognizer.ERROR_NETWORK_TIMEOUT -> "network";
-                        case SpeechRecognizer.ERROR_NO_MATCH, SpeechRecognizer.ERROR_SPEECH_TIMEOUT -> "no-speech";
-                        case SpeechRecognizer.ERROR_RECOGNIZER_BUSY -> "aborted";
-                        default -> "service-not-allowed";
-                    };
-                    fail(code, "Erreur de reconnaissance Android : " + error);
-                }
-            });
-            Intent intent = new Intent(RecognizerIntent.ACTION_RECOGNIZE_SPEECH);
-            intent.putExtra(RecognizerIntent.EXTRA_LANGUAGE_MODEL, RecognizerIntent.LANGUAGE_MODEL_FREE_FORM);
-            intent.putExtra(RecognizerIntent.EXTRA_LANGUAGE, config.optString("lang", "fr-CA"));
-            intent.putExtra(RecognizerIntent.EXTRA_PARTIAL_RESULTS, config.optBoolean("interimResults", true));
-            intent.putExtra(RecognizerIntent.EXTRA_MAX_RESULTS, Math.max(1, Math.min(5, config.optInt("maxAlternatives", 3))));
-            engine.startListening(intent);
-        } catch (RuntimeException e) { fail("service-not-allowed", "Service vocal indisponible."); }
+                    @Override public void error(String message) { if (current()) fail("audio-capture", message); }
+                });
+            }
+            @Override public void error(String message) { if (current()) fail("service-not-allowed", message); }
+        });
     }
-
-    private void next(int token, int delay) {
-        if (stopping || !continuous) { end(); return; }
-        if (token != generation) return;
-        final int retired = ++generation;
-        handler.postDelayed(() -> { if (id != null && retired == generation) begin(false); }, delay);
-    }
-
-    private void result(Bundle results, boolean isFinal) {
-        ArrayList<String> text = results.getStringArrayList(SpeechRecognizer.RESULTS_RECOGNITION);
-        if (text == null || text.isEmpty()) return;
-        JSONObject event = event("result");
+    private void result(String json, boolean isFinal) {
         try {
-            event.put("alternatives", new JSONArray(text));
+            JSONObject data = new JSONObject(json);
+            JSONArray alternatives = new JSONArray();
+            if (!isFinal) {
+                String partial = data.optString("partial").trim();
+                if (partial.isEmpty() || partial.equals(lastPartial)) return;
+                lastPartial = partial;
+                alternatives.put(partial);
+            } else {
+                JSONArray candidates = data.optJSONArray("alternatives");
+                if (candidates != null) {
+                    for (int i = 0; i < candidates.length(); i++) {
+                        String text = candidates.getJSONObject(i).optString("text").trim();
+                        if (!text.isEmpty()) alternatives.put(text);
+                    }
+                } else {
+                    String text = data.optString("text").trim();
+                    if (!text.isEmpty()) alternatives.put(text);
+                }
+                if (alternatives.length() == 0) return;
+                lastPartial = "";
+            }
+            JSONObject event = event("result");
+            event.put("alternatives", alternatives);
             event.put("final", isFinal);
-            JSONArray confidence = new JSONArray();
-            float[] scores = results.getFloatArray(SpeechRecognizer.CONFIDENCE_SCORES);
-            if (scores != null) for (float score : scores) confidence.put((double) score);
-            event.put("confidences", confidence);
-        } catch (Exception ignored) { return; }
-        activity.send(event);
+            activity.send(event);
+            // An endpoint finalizes a phrase, not the microphone or its recorder.
+        } catch (Exception e) { fail("service-not-allowed", "Transcription vocale invalide."); }
     }
-
-    void stop(String requestedId) {
-        if (id == null || !id.equals(requestedId)) return;
-        stopping = true;
-        handler.removeCallbacksAndMessages(null);
-        if (engine != null) engine.stopListening(); else end();
-        int token = generation;
-        handler.postDelayed(() -> { if (id != null && token == generation) end(); }, 1500);
-    }
-
+    void stop(String requestedId) { abort(requestedId); }
     void abort(String requestedId) { if (id != null && id.equals(requestedId)) abort(); }
-    void abort() { if (id != null) end(); else destroyEngine(); }
-    private void end() {
+    void abort() {
         String endedId = id;
         id = null;
+        ++generation;
         awaitingPermission = false;
         resumeAfterPermission = false;
-        ++generation;
-        handler.removeCallbacksAndMessages(null);
-        destroyEngine();
+        Engine old = engine;
+        engine = null;
+        if (old != null) old.close();
         if (endedId != null) {
             JSONObject ended = new JSONObject();
             try { ended.put("channel", "speech"); ended.put("id", endedId); ended.put("type", "end"); } catch (Exception ignored) {}
             activity.send(ended);
         }
     }
-    private void destroyEngine() {
-        SpeechRecognizer previous = engine;
-        engine = null;
-        if (previous != null) { previous.cancel(); previous.destroy(); }
-    }
+    void destroy() { abort(); factory.close(); }
     private void fail(String code, String message) {
         JSONObject event = event("error");
         try { event.put("error", code); event.put("message", message); } catch (Exception ignored) {}
         activity.send(event);
-        end();
+        abort();
     }
     private JSONObject event(String type) {
-        JSONObject object = new JSONObject();
-        try { object.put("channel", "speech"); object.put("id", id); object.put("type", type); } catch (Exception ignored) {}
-        return object;
+        JSONObject event = new JSONObject();
+        try { event.put("channel", "speech"); event.put("id", id); event.put("type", type); } catch (Exception ignored) {}
+        return event;
     }
     private void emit(String type) { activity.send(event(type)); }
 }

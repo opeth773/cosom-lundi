@@ -3,8 +3,7 @@
 Cette application conserve l'interface et les fonctions de la PWA dans une APK
 Android, avec un pont natif pour le microphone, Google, le presse-papiers et les
 exports JSON. Android 8.0 ou plus récent est requis. Android System WebView doit
-être à jour. La reconnaissance vocale nécessite un service vocal Android actif,
-par exemple « Reconnaissance et synthèse vocales Google ».
+être à jour. Le moteur vocal français est inclus dans l’APK et ne dépend pas du service de dictée Google.
 
 ## Séparation de la PWA
 
@@ -27,7 +26,7 @@ synchroniser la ligue, comme dans la PWA. L'APK ne promet pas un mode hors ligne
 
 ## Installation et connexion Google
 
-Installer `releases/Cosom-Android-1.0.0-preview.2.apk` sur le téléphone. Android peut
+Installer `releases/Cosom-Android-1.0.0-preview.3.apk` sur le téléphone. Android peut
 demander d'autoriser l'installation depuis le navigateur ou le gestionnaire de
 fichiers utilisé. L'APK est signée avec une clé Android dédiée et porte le nom
 **Cosom Android**, pour la distinguer de la PWA installée.
@@ -52,27 +51,32 @@ ne peuvent pas la remplacer directement.
 
 ## Commandes vocales Android
 
-La version `1.0.0-preview.2` corrige l'arrêt prématuré lors des reprises du micro :
-les événements d'une ancienne session sont ignorés avant son annulation, le
-silence relance l'écoute et les erreurs Android transitoires sont réessayées avec
-un délai. Le laboratoire reprend aussi une session interrompue sans résultat.
-Une simulation terminée conserve sa pause volontaire et le bouton de relance.
-Cette mise à jour porte le code de version 2 et conserve le certificat original.
+La version `1.0.0-preview.3` remplace entièrement `SpeechRecognizer` et ses
+sessions répétées par **AudioRecord + Vosk 0.3.75**, avec le modèle français
+`vosk-model-small-fr-0.22`. Un seul flux PCM 16 kHz reste ouvert depuis
+l'activation jusqu'à l'arrêt demandé. La fin d'une phrase finalise uniquement sa
+transcription, sans arrêter ou redémarrer le microphone. Aucun son système de
+session de dictée Google n'est déclenché. Les bips de l'application pour la
+commande et son résultat restent disponibles.
 
-Le mode vocal de match et le laboratoire admin utilisent `SpeechRecognizer`
-d'Android en **français canadien (`fr-CA`)**, avec résultats partiels et plusieurs
-interprétations. Le même interpréteur de commandes que la PWA gère « Ajouter un
-but », les joueurs, les aides et les corrections.
+- Le micro demande la permission Android à sa première utilisation.
+- Le modèle est extrait sur l'appareil au premier démarrage du mode vocal.
+- La reconnaissance se fait localement, sans envoyer l'audio à un serveur.
+- Le laboratoire reste actif après une simulation, un nom non reconnu et un
+  silence. Il attend les détails du but sans minuterie d'inactivité.
+- Après chaque résultat, dire à nouveau « Ajouter un but » pour un autre essai.
+- Dire « arrête le test », « arrête le micro » ou utiliser « Arrêter le test »
+  ferme le micro. La mise en arrière-plan et les pertes réelles d'accès au
+  microphone sont traitées explicitement, sans boucle de redémarrage.
+- Les transcriptions tardives après l'arrêt sont ignorées.
 
-- Le micro demande une permission Android à la première utilisation.
-- L'écoute continue est composée de sessions natives successives. Le silence
-  déclenche une reprise temporisée plutôt qu'une boucle de démarrages rapides.
-- Chaque segment conserve son index entre résultats partiels et finaux, afin que
-  l'interpréteur ne compte pas deux fois la même phrase.
-- Fermer le mode vocal ou quitter l'application annule les résultats tardifs.
-- Passer en arrière-plan arrête le microphone. Il faut réactiver le mode vocal
-  manuellement au retour. Aucun service microphone ne tourne en arrière-plan.
-- Une connexion Internet peut être nécessaire au moteur vocal du téléphone.
+Le modèle reconnaît le français général ; la précision des noms et des accents
+québécois dans le bruit du gym doit être validée sur téléphone. Le même
+interpréteur de joueurs, buts et aides reste utilisé. La PWA n'a pas changé.
+L'archive du modèle est épinglée par SHA-256 dans `voice-model.json` et préparée
+par `tools/prepare_voice_model.py`. Le modèle et Vosk sont sous Apache-2.0 ; la
+licence est embarquée dans l'APK. L'augmentation de taille de l'APK est due au
+modèle et aux bibliothèques natives, pas aux données de la ligue.
 
 ## Compiler et tester
 
@@ -83,8 +87,9 @@ distribution. Définir `ANDROID_HOME` ou un `local.properties` ignoré par Git.
 Depuis `android/` :
 
 ```sh
+python3 tools/prepare_voice_model.py
 node --test tests/*.test.cjs
-./gradlew assembleDebug lintDebug
+./gradlew testDebugUnitTest assembleDebug lintDebug
 ```
 
 Pour une APK signée, créer un fichier de propriétés **hors du dépôt** contenant
@@ -111,6 +116,11 @@ dans `releases/`, après vérification de son empreinte et de sa signature.
 Les tests automatiques couvrent le pont vocal, les segments partiels/finalisés,
 l'annulation des résultats tardifs, les erreurs de permission, l'export, le
 cycle de vie, la connexion native simulée et les corrections d'alignement/statistiques.
+Cinq tests Android du contrôleur vérifient notamment des centaines de phrases
+sans remplacer le flux audio et un long silence simulé. Un essai complémentaire
+avec le vrai modèle français et une voix synthétique reconnaît plusieurs
+commandes séparées par des silences dans le même décodeur. Ces tests ne prouvent
+pas encore la capture matérielle sur un téléphone réel.
 Le frontend embarqué démarre jusqu'à l'écran de connexion sans requête externe
 et sans erreur JavaScript dans un navigateur mobile de test.
 

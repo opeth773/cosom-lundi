@@ -236,7 +236,7 @@ public final class MainActivity extends ComponentActivity {
         });
     }
     @Override protected void onDestroy() {
-        speech.abort();
+        speech.destroy();
         google.destroy();
         files.shutdown();
         if (web != null) { web.destroy(); web = null; }

@@ -1,0 +1,10 @@
+{
+  "engine": "Vosk Android 0.3.75",
+  "model": "vosk-model-small-fr-0.22",
+  "language": "French",
+  "sampleRate": 16000,
+  "license": "Apache-2.0",
+  "source": "https://alphacephei.com/vosk/models/vosk-model-small-fr-0.22.zip",
+  "mirror": "https://github.com/opeth773/cosom-lundi/releases/download/speech-model-fr-0.22/vosk-model-small-fr-0.22.zip",
+  "sha256": "cabf6180e177eb9b3a9a9d43a437bd5e549f3a7d09525e5d69a3fed787be12ad"
+}

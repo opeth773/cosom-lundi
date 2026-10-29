@@ -14,8 +14,8 @@ android {
         applicationId = "ca.cosomlundi.app"
         minSdk = 26
         targetSdk = 36
-        versionCode = 2
-        versionName = "1.0.0-preview.2"
+        versionCode = 3
+        versionName = "1.0.0-preview.3"
         buildConfigField("String", "GOOGLE_WEB_CLIENT_ID", "\"$googleClient\"")
     }
     testOptions { unitTests.isIncludeAndroidResources = true }
@@ -25,6 +25,7 @@ android {
         targetCompatibility = JavaVersion.VERSION_17
     }
     sourceSets["main"].assets.srcDir("../web")
+    sourceSets["main"].assets.srcDir("../model-assets")
     if (signingFile?.isFile == true) {
         signingConfigs.create("cosomRelease") {
             storeFile = file(releaseSigning.getProperty("storeFile"))
@@ -40,6 +41,14 @@ android {
         }
     }
 }
+val verifyVoiceModel by tasks.registering {
+    doLast {
+        check(rootProject.file("model-assets/voice-model-fr/am/final.mdl").isFile) {
+            "Run python3 tools/prepare_voice_model.py before building Android."
+        }
+    }
+}
+tasks.matching { it.name == "preBuild" }.configureEach { dependsOn(verifyVoiceModel) }
 val verifyReleaseSigning by tasks.registering {
     doLast {
         check(signingFile?.isFile == true) {
@@ -57,6 +66,7 @@ tasks.withType<Test>().configureEach {
 dependencies {
     testImplementation("junit:junit:4.13.2")
     testImplementation("org.robolectric:robolectric:4.14.1")
+    implementation("com.alphacephei:vosk-android:0.3.75")
     implementation("androidx.activity:activity:1.11.0")
     implementation("androidx.webkit:webkit:1.14.0")
     implementation("androidx.credentials:credentials:1.5.0")

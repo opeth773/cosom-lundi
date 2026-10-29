@@ -24,7 +24,7 @@ function setup(players=[jon,alex,marc1,marc2]) {
     setVoiceStatus:message=>messages.push(message),setVoiceTestStatus:message=>messages.push(message),
     voiceBeep:type=>beeps.push(type),restartVoiceDetailTimeout:()=>{},resetVoiceToListening:()=>{},
     render:()=>{},commitVoiceGoal:async parsed=>committed.push(parsed)});
-  for(const name of ['voiceRecognitionVocabulary','voiceTestLineupPlayers','voiceNameDistance','voiceApproximateAliases','voiceProposalSummary','requestVoiceProposal','normalizeSpeechText','findVoiceTrigger','voiceTeamContext','updateVoiceTeamContext','resetVoiceDetailCollector','setVoiceDetailSegment','getVoiceDetailText','captureVoiceGoalMoment','handleVoiceRecognitionResult','handleVoiceTestRecognitionResult','restartVoiceTestDetailTimeout','isVoiceTestStopCommand','voiceNameTokens','voiceRosterAliases','resolveVoiceRosterNames','parseVoiceRosterDetails','voiceLineupPlayers','parseVoiceGoalDetails','parseVoiceTestDetails','processVoiceGoalAlternatives','processVoiceTestAlternatives']) {
+  for(const name of ['voiceFrenchSound','getVoiceDetailOptions','voiceRecognitionVocabulary','voiceTestLineupPlayers','voiceNameDistance','voiceApproximateAliases','voiceProposalSummary','requestVoiceProposal','normalizeSpeechText','findVoiceTrigger','voiceTeamContext','updateVoiceTeamContext','resetVoiceDetailCollector','setVoiceDetailSegment','getVoiceDetailText','captureVoiceGoalMoment','handleVoiceRecognitionResult','handleVoiceTestRecognitionResult','restartVoiceTestDetailTimeout','isVoiceTestStopCommand','voiceNameTokens','voiceRosterAliases','resolveVoiceRosterNames','parseVoiceRosterDetails','voiceLineupPlayers','parseVoiceGoalDetails','parseVoiceTestDetails','processVoiceGoalAlternatives','processVoiceTestAlternatives']) {
     const start=source.search(new RegExp('^(?:async )?function '+name+'\\(','m'));
     assert.ok(start>=0,name);
     const rest=source.slice(start),end=rest.indexOf('\n}')+2;
@@ -270,9 +270,10 @@ test('reported transcription proposes full anchored name and tolerates assisté 
   assert.equal(parsed.ok,true);assert.equal(parsed.scorerId,'will');assert.deepEqual(ids(parsed),['dupont']);
   assert.equal(parsed.requiresConfirmation,true);
 });
-test('a fuzzy standalone first name is never guessed',()=>{
+test('a homophone of a standalone first name requires confirmation',()=>{
   const {ctx}=setup([will,dupont]);
-  assert.equal(ctx.parseVoiceTestDetails('wild passe dupont').ok,false);
+  const parsed=ctx.parseVoiceTestDetails('wild passe dupont');
+  assert.equal(parsed.ok,true);assert.equal(parsed.requiresConfirmation,true);
 });
 test('nearby full names remain ambiguous',()=>{
   const {ctx}=setup([will,{id:'willy',firstName:'Willy',lastName:'Dupuis'},dupont]);
@@ -346,4 +347,97 @@ test('recognition events preserve a pending correction until the spoken yes arri
  await ctx.handleVoiceTestRecognitionResult(recognitionEvent('oui',true,1));
  await ctx.processVoiceTestAlternatives([ctx.getVoiceDetailText(voiceTest)]);
  assert.equal(voiceTest.results.length,1);assert.equal(voiceTest.results[0].ok,true);assert.equal(voiceTest.enabled,true);
+});
+
+const charles={id:'charles',firstName:'Charles',lastName:'Parisien'};
+const dom={id:'dom',firstName:'Dom',lastName:'Laporte'};
+test('reported Roi and d’homme transcription proposes all three correct players',()=>{
+ const {ctx}=setup([alex,charles,dom]);
+ const parsed=ctx.parseVoiceTestDetails("alex roi passe charles parisien d'homme laporte");
+ assert.equal(parsed.ok,true);assert.equal(parsed.scorerId,'alex');
+ assert.deepEqual(ids(parsed),['charles','dom']);assert.equal(parsed.requiresConfirmation,true);
+});
+test('reported phrase never drops an assist and waits for explicit yes',async()=>{
+ const {ctx,voice,committed}=setup([alex,charles,dom]);voice.captured={team:'dark'};
+ await ctx.processVoiceGoalAlternatives(["alex roi passe charles parisien d'homme laporte"]);
+ assert.equal(committed.length,0);assert.ok(voice.pendingProposal);
+ await ctx.processVoiceGoalAlternatives(['oui']);
+ assert.equal(committed.length,1);assert.deepEqual(ids(committed[0]),['charles','dom']);
+});
+test('phonetic corrections are general across full names and word boundaries',()=>{
+ const phil={id:'phil',firstName:'Philippe',lastName:'Beaulieu'};
+ const franc={id:'franc',firstName:'François',lastName:'Gauthier'};
+ const {ctx}=setup([alex,charles,dom,phil,franc]);
+ for (const [text,id] of [["alex roi",'alex'],['homme laporte','dom'],['domlaporte','dom'],['charles pari sien','charles'],['filipe beaulieu','phil'],['fransois gauthier','franc']]) {
+   const parsed=ctx.parseVoiceTestDetails(text);assert.equal(parsed.ok,true,text+': '+parsed.message);assert.equal(parsed.scorerId,id,text);assert.equal(parsed.requiresConfirmation,true,text);
+ }
+});
+test('unknown trailing and interleaved names are never swallowed by phonetics',()=>{
+ const {ctx}=setup([alex,charles,dom]);
+ for (const text of ['Alex Roy passe Charles Parisien Zorblax et Dom Laporte','Alex Roy passe Charles Parisien Zo','Alex Roy passe Dom bla Laporte']) {
+   assert.equal(ctx.parseVoiceTestDetails(text).ok,false,text);
+ }
+});
+test('phonetically plausible opponents stay excluded by the team scope',()=>{
+ const {ctx,state,voiceTest}=setup([alex,charles,dom]);state.assignments.set('dom',{team:'light'});voiceTest.lineup.dom='light';
+ assert.equal(ctx.parseVoiceTestDetails("but foncés alex roi passe charles parisien d'homme laporte").ok,false);
+ assert.equal(ctx.parseVoiceGoalDetails("but foncés alex roi passe charles parisien d'homme laporte").ok,false);
+});
+test('nearby homophones in the same team require clarification rather than a guess',()=>{
+ const tom={id:'tom',firstName:'Tom',lastName:'Laporte'};
+ const {ctx}=setup([alex,dom,tom]);
+ const parsed=ctx.parseVoiceTestDetails("Alex Roy passe d'homme laporte");
+ assert.equal(parsed.ok,false);assert.match(parsed.message,/ambigu/);
+});
+test('Google alternatives survive across multiple final segments',async()=>{
+ const {ctx,voiceTest}=setup([alex,charles,dom]);
+ const event=(options,index)=>({resultIndex:index,results:[...Array(index).fill(null),Object.assign(options.map(transcript=>({transcript})),{isFinal:true})]});
+ await ctx.handleVoiceTestRecognitionResult(event(['alex roi passe charles parisien','Alex Roy passe Charles Parisien'],0));
+ await ctx.handleVoiceTestRecognitionResult(event(["d'homme laporte",'Dom Laporte'],1));
+ const options=ctx.getVoiceDetailOptions(voiceTest);
+ assert.ok(options.includes('alex roy passe charles parisien dom laporte'));
+ await ctx.processVoiceTestAlternatives(options);
+ assert.equal(voiceTest.results.length,0);assert.ok(voiceTest.pendingProposal);
+ assert.deepEqual(ids(voiceTest.pendingProposal.parsed),['charles','dom']);
+ await ctx.processVoiceTestAlternatives(['oui']);
+ assert.equal(voiceTest.results[0].ok,true);
+});
+test('an exact alternate never bypasses confirmation of a corrected primary',async()=>{
+ const {ctx,voiceTest}=setup([alex,charles,dom]);
+ await ctx.processVoiceTestAlternatives(["alex roi passe charles parisien d'homme laporte",'Alex Roy passe Charles Parisien Dom Laporte']);
+ assert.equal(voiceTest.results.length,0);assert.ok(voiceTest.pendingProposal);
+ await ctx.processVoiceTestAlternatives(['non']);assert.equal(voiceTest.results.length,0);
+});
+
+test('shorter alternate hypotheses cannot drop a validated assist or invalidate a complete primary',async()=>{
+ const {ctx,voiceTest}=setup([alex,charles,dom]);
+ await ctx.processVoiceTestAlternatives(['Alex Roy passe Charles Parisien et Dom Laporte','Alex Roy passe Charles Parisien']);
+ assert.equal(voiceTest.results.length,1);assert.equal(voiceTest.results[0].ok,true);
+ assert.match(voiceTest.results[0].summary,/Charles Parisien et Dom Laporte/);
+});
+test('bounded hypothesis combinations retain alternatives from earlier segments',()=>{
+ const {ctx,voiceTest}=setup();
+ for (let segment=0;segment<3;segment++) ctx.setVoiceDetailSegment(voiceTest,segment,`primary${segment}`,[...Array(4)].map((_,i)=>`alt${segment}x${i}`));
+ const options=ctx.getVoiceDetailOptions(voiceTest);
+ assert.equal(options[0],'primary0 primary1 primary2');assert.ok(options.length<=12);
+ assert.ok(options.includes('alt0x0 primary1 primary2'));
+ assert.ok(options.includes('primary0 alt1x0 primary2'));
+ assert.ok(options.includes('primary0 primary1 alt2x0'));
+});
+
+test('a conflicting team in an alternate is preserved and cannot change the captured side',async()=>{
+ const {ctx,voiceTest}=teams();voiceTest.team='light';
+ ctx.setVoiceDetailSegment(voiceTest,0,'Jonathan passe Marc et Alex',['but foncés Jonathan passe Marc et Alex']);
+ const options=ctx.getVoiceDetailOptions(voiceTest);
+ assert.ok(options.includes('but fonces jonathan passe marc et alex'));
+ await ctx.processVoiceTestAlternatives(options);
+ assert.equal(voiceTest.results.length,1);assert.equal(voiceTest.results[0].ok,true);
+ assert.match(voiceTest.results[0].summary,/Pâles/);assert.match(voiceTest.results[0].summary,/Jonathan Varin/);
+});
+
+test('identical-sounding roster names remain ambiguous even if Google spells one exactly',()=>{
+ const roi={id:'roi',firstName:'Alex',lastName:'Roi'};
+ const {ctx}=setup([alex,roi,charles,dom]);
+ const parsed=ctx.parseVoiceTestDetails('Alex Roi passe Charles Parisien');
+ assert.equal(parsed.ok,false);assert.match(parsed.message,/ambigu/);
 });

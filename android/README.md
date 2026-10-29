@@ -26,7 +26,7 @@ synchroniser la ligue, comme dans la PWA. L'APK ne promet pas un mode hors ligne
 
 ## Installation et connexion Google
 
-Installer `releases/Cosom-Android-1.0.0-preview.6.apk` sur le téléphone. Android peut
+Installer `releases/Cosom-Android-1.0.0-preview.7.apk` sur le téléphone. Android peut
 demander d'autoriser l'installation depuis le navigateur ou le gestionnaire de
 fichiers utilisé. L'APK est signée avec une clé Android dédiée et porte le nom
 **Cosom Android**, pour la distinguer de la PWA installée.
@@ -137,6 +137,35 @@ Elle s'applique également au mode vocal en partie. Les noms et identifiants son
 revérifiés à la confirmation. Les formulations « assisté de » et « assisté dans »
 sont acceptées. Le moteur reçoit les noms, alias disponibles et phrases d'exemple.
 Le moteur vocal et la capture audio continue restent inchangés.
+
+### Phonétique et transcriptions alternatives (version 7)
+
+La résolution des noms compare maintenant aussi une représentation phonétique
+française (homophones, consonnes doubles, lettres muettes, etc.) et accepte des
+frontières de mots différentes. La comparaison reste limitée aux joueurs de
+l'équipe annoncée. Ce sont des propositions à confirmer, pas des attributions
+automatiques. Une proximité phonétique avec plusieurs joueurs reste ambiguë.
+Les mots inconnus ne sont pas ignorés pour conserver une partie de la commande.
+
+Exemple testé : « alex roi passe charles parisien d'homme laporte » propose
+Alex Roy avec les deux aides Charles Parisien et Dom Laporte si ces joueurs
+sont dans l'équipe annoncée. Cette règle ne contient aucun nom de joueur codé
+en dur. Les noms complets, prénoms, noms de famille, alias disponibles et phrases
+de passes sont envoyés comme indications au moteur.
+
+Les hypothèses alternatives du moteur sont conservées par segment, combinées
+avec une limite de douze propositions et comparées à l'analyse primaire. Une
+alternative plus courte ne supprime jamais une aide validée dans la primaire.
+Une primaire contenant un nom inconnu ne peut pas être remplacée par une
+alternative qui le supprime. Une correction primaire exige une confirmation
+même si une alternative donne déjà l'orthographe exacte. Une hypothèse désignant
+d'autres joueurs avec le même nombre d'aides demande une précision.
+
+Le texte brut produit par Google peut rester imparfait : ce correctif améliore
+le vocabulaire suggéré et l'interprétation des noms. Les tests de transcription
+portent sur les textes signalés ; la précision acoustique sur un téléphone
+physique n'est pas mesurée par ces tests. Aucun service vocal payant ni nouvel
+envoi d'audio n'est ajouté. La capture audio continue reste inchangée.
 
 ## Compiler et tester
 

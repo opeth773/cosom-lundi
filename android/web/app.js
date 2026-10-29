@@ -2019,7 +2019,7 @@ async function handleVoiceRecognitionResult(event) {
           voice.lastTranscript = remainder;
           updateVoiceHeard(remainder);
           if (result.isFinal) {
-            setVoiceDetailSegment(voice, i, remainder);
+            setVoiceDetailSegment(voice, i, remainder, alternatives);
             scheduleVoiceGoalDetailProcessing();
           }
         }
@@ -2034,7 +2034,7 @@ async function handleVoiceRecognitionResult(event) {
       if (!detailText) continue;
 
       if (result.isFinal) {
-        setVoiceDetailSegment(voice, i, detailText);
+        setVoiceDetailSegment(voice, i, detailText, alternatives);
         const combined = getVoiceDetailText(voice);
         voice.lastTranscript = combined;
         updateVoiceHeard(combined);
@@ -2078,12 +2078,20 @@ function resetVoiceDetailCollector(holder) {
   clearTimeout(holder.detailProcessTimer);
   holder.detailProcessTimer = null;
   holder.detailSegments = {};
+  holder.detailAlternatives = {};
 }
 
-function setVoiceDetailSegment(holder, resultIndex, text) {
+function setVoiceDetailSegment(holder, resultIndex, text, alternatives=[]) {
   const normalized = normalizeSpeechText(text);
   if (!normalized) return;
   holder.detailSegments[String(resultIndex)] = normalized;
+  holder.detailAlternatives ||= {};
+  holder.detailAlternatives[String(resultIndex)] = [...new Set([normalized,...alternatives.map(value=>{
+    const cleaned=normalizeSpeechText(value);
+    const hit=findVoiceTrigger(cleaned);
+    const team=holder===voice ? holder.captured?.team : holder.team;
+    return (hit && (!hit.team || hit.team===team) ? cleaned.slice(hit.end) : cleaned).trim();
+  }).filter(Boolean)])].slice(0,5);
 }
 
 function getVoiceDetailText(holder) {
@@ -2094,6 +2102,19 @@ function getVoiceDetailText(holder) {
     .join(' ')
     .replace(/\s+/g, ' ')
     .trim();
+}
+
+function getVoiceDetailOptions(holder) {
+  let options=[{text:'',rank:0}];
+  for (const index of Object.keys(holder.detailSegments || {}).sort((a,b)=>Number(a)-Number(b))) {
+    const variants=holder.detailAlternatives?.[index] || [holder.detailSegments[index]];
+    const combined=[];
+    for (const option of options) variants.forEach((variant,rank)=>combined.push({text:[option.text,variant].filter(Boolean).join(' '),rank:option.rank+rank}));
+    // Favor low-rank alternatives across all segments while bounding combinations.
+    const seen=new Set();
+    options=combined.sort((a,b)=>a.rank-b.rank).filter(option=>!seen.has(option.text) && seen.add(option.text)).slice(0,12);
+  }
+  return options.map(option=>option.text).filter(Boolean);
 }
 
 function scheduleVoiceGoalDetailProcessing(delay=2000) {
@@ -2108,7 +2129,7 @@ async function finalizeVoiceGoalDetails() {
   if (!voice.enabled || voice.phase !== 'details') return;
   const text = getVoiceDetailText(voice);
   if (!text) return;
-  await processVoiceGoalAlternatives([text]);
+  await processVoiceGoalAlternatives(getVoiceDetailOptions(voice));
 }
 
 function captureVoiceGoalMoment(team=null) {
@@ -2160,7 +2181,7 @@ async function processVoiceGoalAlternatives(options) {
   }
   const parses = firstParsed.ok ? options
     .map(text => ({text, parsed:parseVoiceGoalDetails(text)}))
-    .filter(x => x.parsed?.ok)
+    .filter(x => x.parsed?.ok && x.parsed.assists.length===firstParsed.assists.length)
     .sort((a,b) => b.parsed.confidence - a.parsed.confidence) : [];
   const identities = new Set(parses.map(p => `${p.parsed.scorerId}|${p.parsed.assists.slice().sort().join(',')}`));
 
@@ -2180,7 +2201,7 @@ async function processVoiceGoalAlternatives(options) {
     return;
   }
 
-  if (parses[0].parsed.requiresConfirmation && !confirmed) { requestVoiceProposal(voice,parses[0]); return; }
+  if ((firstParsed.requiresConfirmation || parses[0].parsed.requiresConfirmation) && !confirmed) { requestVoiceProposal(voice,parses[0]); return; }
 
   voice.lastTranscript = parses[0].text;
   updateVoiceHeard(parses[0].text);
@@ -2243,7 +2264,22 @@ function voiceTestLineupPlayers(team=null) {
 function voiceRecognitionVocabulary(players) {
   const names=players.map(player=>playerName(player));
   const aliases=players.flatMap(player=>Array.isArray(player.voiceAliases)?player.voiceAliases:[]);
-  return [...new Set([...names,...aliases,'oui','non',...names.map(name=>`but ${name}`),...names.map(name=>`assisté de ${name}`)])].slice(0,200);
+  // Full names first, then their components and natural hockey formulations.
+  return [...new Set([...names,'oui','non',...aliases,
+    ...players.flatMap(player=>[player.firstName,player.lastName]).filter(Boolean),
+    ...names.map(name=>`passe ${name}`),...names.map(name=>`but ${name}`),
+    ...names.map(name=>`assisté de ${name}`)])].slice(0,200);
+}
+
+function voiceFrenchSound(text) {
+  return normalizeSpeechText(text).split(' ').map(word=>word
+    .replace(/ph/g,'f').replace(/gn/g,'ny').replace(/eau|au/g,'o')
+    .replace(/qu/g,'k').replace(/gu(?=[eiy])/g,'g').replace(/ch/g,'sh')
+    .replace(/c(?=[eiy])/g,'s').replace(/c/g,'k').replace(/g(?=[eiy])/g,'j')
+    .replace(/y/g,'i').replace(/oi/g,'wa').replace(/ain|ein|aim/g,'in')
+    .replace(/([aeiou])s(?=[aeiou])/g,'$1z').replace(/(^|[^s])h/g,'$1').replace(/x/g,'ks')
+    .replace(/(.)\1+/g,'$1').replace(/e$/,'').replace(/[sxztdp]+$/,''))
+    .join('');
 }
 
 function voiceNameDistance(a,b) {
@@ -2257,17 +2293,38 @@ function voiceNameDistance(a,b) {
 }
 
 function voiceApproximateAliases(tokens,position,aliases) {
-  // Only propose complete names with at least one unchanged name component.
-  // Every approximate proposal requires explicit confirmation before recording.
-  return aliases.filter(alias => {
-    if (alias.tokens.length < 2 || position+alias.tokens.length > tokens.length) return false;
-    const surname = voiceNameTokens(alias.player.lastName || '');
-    if (!surname.length || alias.text !== voiceNameTokens(playerName(alias.player)).join(' ')) return false;
-    if (!alias.tokens.some((word,i)=>word.length>=3 && tokens[position+i]===word)) return false;
-    const heard=tokens.slice(position,position+alias.tokens.length).join(' ');
-    const distance=voiceNameDistance(heard,alias.text);
-    return distance>0 && distance<=Math.min(2,Math.floor(alias.text.length/4));
-  }).map(alias=>({...alias,length:alias.tokens.length,score:0.8}));
+  const matches=[];
+  for (const alias of aliases) {
+    const canonical=voiceNameTokens(playerName(alias.player)).join(' ');
+    const full=alias.text===canonical && alias.tokens.length>=2;
+    const expectedSound=voiceFrenchSound(alias.text);
+    if (!expectedSound) continue;
+    const first=voiceFrenchSound(voiceNameTokens(alias.player.firstName).join(' '));
+    const last=voiceFrenchSound(voiceNameTokens(alias.player.lastName).join(' '));
+    for (let length=1;length<=Math.min(6,tokens.length-position);length++) {
+      const words=tokens.slice(position,position+length);
+      const heard=words.join(' ');
+      if (heard===alias.text) continue;
+      const sound=voiceFrenchSound(heard);
+      if (!sound) continue;
+      const phonetic=voiceNameDistance(sound,expectedSound);
+      const spelling=voiceNameDistance(words.join(''),alias.tokens.join(''));
+      let accepted=false;
+      if (full) {
+        const firstAnchor=first.length>=3 && (sound.startsWith(first) || words.some((_,i)=>voiceFrenchSound(words.slice(0,i+1).join(''))===first));
+        const lastAnchor=last.length>=3 && (sound.endsWith(last) || words.some((_,i)=>voiceFrenchSound(words.slice(i).join(''))===last));
+        const limit=Math.min(2,Math.max(1,Math.floor(expectedSound.length/6)));
+        // Extra words must belong to the name, never be swallowed after its surname.
+        const boundary=length===alias.tokens.length || lastAnchor || phonetic===0;
+        accepted=boundary && (phonetic===0 || ((firstAnchor || lastAnchor) && (phonetic<=limit || spelling<=2)));
+      } else {
+        // Homophones of a single alias are proposals, never automatic aliases.
+        accepted=length===1 && alias.tokens.length===1 && expectedSound.length>=3 && phonetic===0;
+      }
+      if (accepted) matches.push({...alias,length,score:phonetic===0?0.9:0.8});
+    }
+  }
+  return matches;
 }
 
 function voiceProposalSummary(parsed) {
@@ -2317,6 +2374,10 @@ function resolveVoiceRosterNames(text, players) {
     const approximate = voiceApproximateAliases(tokens,position,aliases);
     const exactLength = matches.length ? Math.max(...matches.map(match=>match.length)) : 0;
     if (approximate.some(match=>match.length>exactLength)) matches=approximate.filter(match=>match.length>exactLength);
+    else if (matches.length) {
+      const exactIds=new Set(matches.filter(match=>match.length===exactLength).map(match=>match.player.id));
+      matches.push(...approximate.filter(match=>match.length===exactLength && match.score===0.9 && !exactIds.has(match.player.id)));
+    }
     if (matches.length) {
       const longest = Math.max(...matches.map(match => match.length));
       matches = matches.filter(match => match.length === longest);
@@ -2790,7 +2851,7 @@ async function handleVoiceTestRecognitionResult(event) {
           voiceTest.lastTranscript = remainder;
           updateVoiceTestHeard(remainder);
           if (result.isFinal) {
-            setVoiceDetailSegment(voiceTest, i, remainder);
+            setVoiceDetailSegment(voiceTest, i, remainder, alternatives);
             scheduleVoiceTestDetailProcessing();
           }
         }
@@ -2805,7 +2866,7 @@ async function handleVoiceTestRecognitionResult(event) {
       if (!detailText) continue;
 
       if (result.isFinal) {
-        setVoiceDetailSegment(voiceTest, i, detailText);
+        setVoiceDetailSegment(voiceTest, i, detailText, alternatives);
         const combined = getVoiceDetailText(voiceTest);
         voiceTest.lastTranscript = combined;
         updateVoiceTestHeard(combined);
@@ -2833,7 +2894,7 @@ async function finalizeVoiceTestDetails() {
   if (!voiceTest.enabled || voiceTest.phase !== 'details' || voiceTest.pauseAfterResult) return;
   const text = getVoiceDetailText(voiceTest);
   if (!text) return;
-  await processVoiceTestAlternatives([text]);
+  await processVoiceTestAlternatives(getVoiceDetailOptions(voiceTest));
 }
 
 async function processVoiceTestAlternatives(options) {
@@ -2857,7 +2918,7 @@ async function processVoiceTestAlternatives(options) {
   }
   const parses = firstParsed.ok ? options
     .map(value => ({text:value, parsed:parseVoiceTestDetails(value)}))
-    .filter(item => item.parsed?.ok)
+    .filter(item => item.parsed?.ok && item.parsed.assists.length===firstParsed.assists.length)
     .sort((a,b) => b.parsed.confidence - a.parsed.confidence) : [];
   const identities = new Set(parses.map(p => `${p.parsed.scorerId}|${p.parsed.assists.slice().sort().join(',')}`));
 
@@ -2887,7 +2948,7 @@ async function processVoiceTestAlternatives(options) {
   }
 
   const best = parses[0];
-  if (best.parsed.requiresConfirmation && !confirmed) { requestVoiceProposal(voiceTest,best); return; }
+  if ((firstParsed.requiresConfirmation || best.parsed.requiresConfirmation) && !confirmed) { requestVoiceProposal(voiceTest,best); return; }
   const parsed = best.parsed;
   const assistNames = parsed.assists.map(id=>playerName(findPlayer(id))).filter(Boolean);
   const assistLabel = assistNames.length ? ` · aides ${assistNames.join(' et ')}` : ' · sans aide';

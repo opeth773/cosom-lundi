@@ -111,7 +111,7 @@ test('lab does not restart a recorder when an unexpected end is reported', async
   let starts=0;
   const voiceTest={enabled:false,recognition:null};
   const ctx=vm.createContext({window:{CosomAndroid:{}},voiceTest,voice:{enabled:false},
-    isAdmin:()=>true,activePlayers:()=>[{}],playerName:()=> 'Marc',unlockAudio:async()=>{},resetVoiceDetailCollector:()=>{},
+    voiceTestLineupPlayers:()=>[{}],voiceRecognitionVocabulary:()=>['Marc'],isAdmin:()=>true,activePlayers:()=>[{}],playerName:()=> 'Marc',unlockAudio:async()=>{},resetVoiceDetailCollector:()=>{},
     setVoiceTestStatus:()=>{},render:()=>{},SpeechRecognitionCtor:function(){},
     startVoiceTestRecognition:()=>starts++,
     stopVoiceTest:()=>{voiceTest.enabled=false;}});
@@ -127,7 +127,7 @@ function labContext(parsed) {
   const source=fs.readFileSync(path.join(__dirname,'../web/app.js'),'utf8');
   const voiceTest={enabled:true,phase:'details',pauseAfterResult:false,results:[],running:true,
     recognition:{abort(){throw new Error('Microphone must stay open');}}};
-  const ctx=vm.createContext({voiceTest,Date,clearTimeout:()=>{},resetVoiceDetailCollector:()=>{},
+  const ctx=vm.createContext({voiceTest,Date,normalizeSpeechText:s=>s.toLowerCase(),clearTimeout:()=>{},resetVoiceDetailCollector:()=>{},
     parseVoiceTestDetails:()=>parsed,updateVoiceTestHeard:()=>{},setVoiceTestStatus:()=>{},
     voiceBeep:()=>{},render:()=>{},playerName:p=>p?.name||'',findPlayer:()=>({name:'Marc'})});
   const a=source.indexOf('async function processVoiceTestAlternatives(');

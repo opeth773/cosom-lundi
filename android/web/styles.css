@@ -4060,25 +4060,18 @@ tbody td:first-child {
   font-size: 11px;
 }
 
-.voice-test-roster > div {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 5px;
-  margin-top: 8px;
+.voice-test-lineup {
+  margin-top: 14px;
+  padding: 12px;
+  border: 1px solid var(--line);
+  border-radius: 12px;
 }
 
-.voice-test-roster span {
-  display: inline-flex;
-  align-items: center;
-  min-height: 28px;
-  padding: 4px 8px;
-  border: 1px solid var(--line);
-  border-radius: 999px;
-  background: var(--surface);
-  color: var(--sub);
-  font-size: 10px;
-  font-weight: 750;
-}
+.voice-test-lineup h4 { margin: 0 0 10px; }
+.voice-test-lineup label { gap: 10px; margin-top: 12px; }
+.voice-test-lineup label span { flex: 1; min-width: 0; overflow-wrap: anywhere; }
+.voice-test-lineup select { width: auto; max-width: 45%; min-height: 44px; }
+.voice-test-lineup input { width: 100%; min-height: 44px; margin-top: 5px; font-size: 12px; }
 
 .voice-test-history-title {
   margin-top: 17px;

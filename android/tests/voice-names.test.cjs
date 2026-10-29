@@ -12,7 +12,7 @@ function setup(players=[jon,alex,marc1,marc2]) {
   const messages=[],committed=[],beeps=[];
   const state={currentMatch:{id:'m'},players,assignments:new Map(players.map(p=>[p.id,{team:'dark'}]))};
   const voice={enabled:true,matchId:'m',phase:'details'};
-  const voiceTest={enabled:true,phase:'details',pauseAfterResult:false,results:[],running:true};
+  const voiceTest={enabled:true,phase:'details',pauseAfterResult:false,results:[],running:true,detailSegments:{},lineup:Object.fromEntries(players.map(p=>[p.id,'dark']))};
   const ctx=vm.createContext({state,voice,voiceTest,Date,
     activePlayers:()=>players,matchAssignments:()=>state.assignments,
     findPlayer:id=>players.find(p=>p.id===id),
@@ -24,7 +24,7 @@ function setup(players=[jon,alex,marc1,marc2]) {
     setVoiceStatus:message=>messages.push(message),setVoiceTestStatus:message=>messages.push(message),
     voiceBeep:type=>beeps.push(type),restartVoiceDetailTimeout:()=>{},resetVoiceToListening:()=>{},
     render:()=>{},commitVoiceGoal:async parsed=>committed.push(parsed)});
-  for(const name of ['normalizeSpeechText','findVoiceTrigger','voiceTeamContext','updateVoiceTeamContext','resetVoiceDetailCollector','setVoiceDetailSegment','getVoiceDetailText','captureVoiceGoalMoment','handleVoiceRecognitionResult','handleVoiceTestRecognitionResult','restartVoiceTestDetailTimeout','isVoiceTestStopCommand','voiceNameTokens','voiceRosterAliases','resolveVoiceRosterNames','parseVoiceRosterDetails','voiceLineupPlayers','parseVoiceGoalDetails','parseVoiceTestDetails','processVoiceGoalAlternatives','processVoiceTestAlternatives']) {
+  for(const name of ['voiceRecognitionVocabulary','voiceTestLineupPlayers','voiceNameDistance','voiceApproximateAliases','voiceProposalSummary','requestVoiceProposal','normalizeSpeechText','findVoiceTrigger','voiceTeamContext','updateVoiceTeamContext','resetVoiceDetailCollector','setVoiceDetailSegment','getVoiceDetailText','captureVoiceGoalMoment','handleVoiceRecognitionResult','handleVoiceTestRecognitionResult','restartVoiceTestDetailTimeout','isVoiceTestStopCommand','voiceNameTokens','voiceRosterAliases','resolveVoiceRosterNames','parseVoiceRosterDetails','voiceLineupPlayers','parseVoiceGoalDetails','parseVoiceTestDetails','processVoiceGoalAlternatives','processVoiceTestAlternatives']) {
     const start=source.search(new RegExp('^(?:async )?function '+name+'\\(','m'));
     assert.ok(start>=0,name);
     const rest=source.slice(start),end=rest.indexOf('\n}')+2;
@@ -118,7 +118,7 @@ test('real games require every named assistant to be on the scorer team',()=>{
 test('an approximate name is reported instead of silently assigned to a similar player',()=>{
   const {ctx}=setup();
   const result=ctx.parseVoiceTestDetails('Jonnathan Varin passe Marc André Tremblay et Alex Roy');
-  assert.equal(result.ok,false);assert.match(result.message,/jonnathan/);
+  assert.equal(result.ok,true);assert.equal(result.requiresConfirmation,true);assert.equal(result.scorerId,'jon');
 });
 test('live processing never writes a partial goal, even when an alternative drops the unknown assist',async()=>{
   const {ctx,committed,messages}=setup([jon,alex]);
@@ -152,6 +152,7 @@ function teams() {
   const fixture=setup([jon,alex,marc1,marc2,jonDark,alexDark]);
   for(const p of [jon,alex,marc1])fixture.state.assignments.set(p.id,{team:'light'});
   for(const p of [jonDark,alexDark,marc2])fixture.state.assignments.set(p.id,{team:'dark'});
+  fixture.voiceTest.lineup=Object.fromEntries([...fixture.state.assignments].map(([id,a])=>[id,a.team]));
   return fixture;
 }
 function recognitionEvent(text,isFinal=true,index=0) {
@@ -186,18 +187,20 @@ test('players on the opposing side cannot be credited to the announced team',()=
   const parsed=ctx.parseVoiceGoalDetails('but pâles Jonathan passe Dubé et Roy');
   assert.equal(parsed.ok,false);assert.match(parsed.message,/dube/);assert.match(parsed.message,/Pâles/);
 });
-test('the lab uses the selected match lineup and shows the simulated team',async()=>{
+test('the lab uses independent fictitious lineups and shows the simulated team',async()=>{
   const {ctx,voiceTest}=teams();
   await ctx.processVoiceTestAlternatives(['but pâles Jonathan passe Marc et Alex']);
   assert.equal(voiceTest.results[0].ok,true);assert.match(voiceTest.results[0].summary,/Pâles/);
   assert.match(voiceTest.results[0].summary,/Marc-André Tremblay et Alex Roy/);
   assert.equal(voiceTest.team,null);assert.equal(voiceTest.enabled,true);
 });
-test('team simulation refuses absent or empty lineups instead of searching all league players',()=>{
-  const {ctx,state}=teams();state.currentMatch=null;
-  assert.match(ctx.parseVoiceTestDetails('but pâles Jonathan').message,/Sélectionne une partie/);
-  state.currentMatch={id:'m'};state.assignments.clear();
-  assert.match(ctx.parseVoiceTestDetails('but pâles Jonathan').message,/Aucun joueur/);
+test('lab lineups work without a match and never follow real assignments',()=>{
+  const {ctx,state,voiceTest}=teams();state.currentMatch=null;state.assignments.clear();
+  assert.equal(ctx.parseVoiceTestDetails('but pâles Jonathan').scorerId,'jon');
+  assert.equal(ctx.parseVoiceTestDetails('but foncés Jonathan').scorerId,'jonDark');
+  voiceTest.lineup.jon='dark';
+  assert.equal(ctx.parseVoiceTestDetails('but pâles Jonathan').ok,false);
+  assert.equal(state.assignments.size,0);
 });
 test('the team trigger and the later names share one pending goal and do not write early',async()=>{
   const {ctx,voice,committed}=teams();voice.phase='idle';
@@ -257,4 +260,90 @@ test('actual goal persistence updates only the announced scoreboard side after a
   await ctx.processVoiceGoalAlternatives(['Jonathan passe Marc et Alex']);
   assert.equal(saved.length,2);assert.equal(ctx.getScore().light,1);assert.equal(ctx.getScore().dark,1);
   assert.equal(saved[1].scorerId,'jonDark');assert.deepEqual(ids(saved[1]),['marc2','alexDark']);
+});
+
+const will={id:'will',firstName:'Will',lastName:'Dupuis'};
+const dupont={id:'dupont',firstName:'Marc-André',lastName:'Dupont'};
+test('reported transcription proposes full anchored name and tolerates assisté dans',()=>{
+  const {ctx}=setup([will,dupont]);
+  const parsed=ctx.parseVoiceTestDetails('wild dupuis assiste dans marc andre dupont');
+  assert.equal(parsed.ok,true);assert.equal(parsed.scorerId,'will');assert.deepEqual(ids(parsed),['dupont']);
+  assert.equal(parsed.requiresConfirmation,true);
+});
+test('a fuzzy standalone first name is never guessed',()=>{
+  const {ctx}=setup([will,dupont]);
+  assert.equal(ctx.parseVoiceTestDetails('wild passe dupont').ok,false);
+});
+test('nearby full names remain ambiguous',()=>{
+  const {ctx}=setup([will,{id:'willy',firstName:'Willy',lastName:'Dupuis'},dupont]);
+  assert.match(ctx.parseVoiceTestDetails('wild dupuis passe dupont').message,/ambigu/);
+});
+test('a correction in lab waits for yes before marking simulation successful',async()=>{
+  const {ctx,voiceTest}=setup([will,dupont]);
+  await ctx.processVoiceTestAlternatives(['wild dupuis assiste dans marc andre dupont']);
+  assert.equal(voiceTest.results.length,0);assert.ok(voiceTest.pendingProposal);
+  await ctx.processVoiceTestAlternatives(['oui']);
+  assert.equal(voiceTest.results.length,1);assert.equal(voiceTest.results[0].ok,true);
+  assert.match(voiceTest.results[0].summary,/Will Dupuis/);
+});
+test('a correction in a real match never writes before confirmation',async()=>{
+  const {ctx,voice,committed}=setup([will,dupont]);voice.captured={team:'dark'};
+  await ctx.processVoiceGoalAlternatives(['wild dupuis assiste dans marc andre dupont']);
+  assert.equal(committed.length,0);assert.ok(voice.pendingProposal);
+  await ctx.processVoiceGoalAlternatives(['oui']);
+  assert.equal(committed.length,1);assert.equal(committed[0].scorerId,'will');
+});
+test('no cancels the correction without recording anything',async()=>{
+  const {ctx,voiceTest,committed}=setup([will,dupont]);
+  await ctx.processVoiceTestAlternatives(['wild dupuis passe dupont']);
+  await ctx.processVoiceTestAlternatives(['non']);
+  assert.equal(voiceTest.pendingProposal,null);assert.equal(voiceTest.results.length,0);assert.equal(committed.length,0);
+});
+test('automatic lab teams include every player exactly once and reset between leagues',()=>{
+  const {ctx,state,voiceTest}=setup();state.currentMatch=null;
+  const light=ctx.voiceTestLineupPlayers('light'),dark=ctx.voiceTestLineupPlayers('dark');
+  assert.equal(light.length+dark.length,4);assert.equal(new Set([...light,...dark].map(p=>p.id)).size,4);
+  voiceTest.lineup.jon='dark';state.leagueId='another-league';ctx.voiceTestLineupPlayers();
+  assert.equal(voiceTest.lineupLeagueId,'another-league');assert.equal(state.assignments.size,4);
+});
+
+test('the same general correction also handles misspelled surnames',()=>{
+ const {ctx}=setup([jon,alex]);
+ const parsed=ctx.parseVoiceTestDetails('Jonathan Varinn passe Alex Roy');
+ assert.equal(parsed.ok,true);assert.equal(parsed.requiresConfirmation,true);assert.equal(parsed.scorerId,'jon');
+});
+test('lab aliases are scoped to the lab and respect the announced team',()=>{
+ const {ctx,voiceTest}=teams();ctx.voiceTestLineupPlayers();voiceTest.aliases={jon:['Jojo']};
+ assert.equal(ctx.parseVoiceTestDetails('but pâles Jojo').scorerId,'jon');
+ assert.equal(ctx.parseVoiceTestDetails('but foncés Jojo').ok,false);
+ assert.equal(ctx.parseVoiceGoalDetails('but pâles Jojo').ok,false);
+});
+
+test('lab infers the fictitious side without a color and rejects mixed teams',()=>{
+ const {ctx}=teams();
+ assert.equal(ctx.parseVoiceTestDetails('Jonathan Varin passe Alex Roy').team,'light');
+ assert.equal(ctx.parseVoiceTestDetails('Jonathan Varin passe Marc-André Dubé').ok,false);
+});
+test('a delayed yes cannot confirm a changed lab roster',async()=>{
+ const {ctx,voiceTest}=setup([will,dupont]);
+ await ctx.processVoiceTestAlternatives(['wild dupuis passe dupont']);
+ voiceTest.lineup.dupont='light';
+ await ctx.processVoiceTestAlternatives(['oui']);
+ assert.equal(voiceTest.results.length,0);assert.equal(voiceTest.pendingProposal,null);
+});
+
+test('vocabulary carries complete roster names, aliases and scoring phrases',()=>{
+ const {ctx}=setup();
+ const hints=ctx.voiceRecognitionVocabulary([{...jon,voiceAliases:['Jojo']}]);
+ for (const phrase of ['Jonathan Varin','Jojo','oui','non','but Jonathan Varin','assisté de Jonathan Varin']) assert.ok(hints.includes(phrase));
+ assert.ok(!hints.includes('Alex Roy'));assert.ok(hints.length<=200);
+});
+test('recognition events preserve a pending correction until the spoken yes arrives',async()=>{
+ const {ctx,voiceTest}=setup([will,dupont]);voiceTest.team='dark';
+ await ctx.handleVoiceTestRecognitionResult(recognitionEvent('wild dupuis assiste dans marc andre dupont'));
+ await ctx.processVoiceTestAlternatives([ctx.getVoiceDetailText(voiceTest)]);
+ assert.ok(voiceTest.pendingProposal);assert.equal(ctx.getVoiceDetailText(voiceTest),'');
+ await ctx.handleVoiceTestRecognitionResult(recognitionEvent('oui',true,1));
+ await ctx.processVoiceTestAlternatives([ctx.getVoiceDetailText(voiceTest)]);
+ assert.equal(voiceTest.results.length,1);assert.equal(voiceTest.results[0].ok,true);assert.equal(voiceTest.enabled,true);
 });

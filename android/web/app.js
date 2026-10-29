@@ -1241,6 +1241,19 @@ root.addEventListener('change', async e => {
   }
   const action = e.target.dataset.change;
   try {
+    if (action==='voice-test-alias') {
+      if (!isAdmin() || voiceTest.enabled) return;
+      voiceTestLineupPlayers();
+      if (activePlayers().some(p=>p.id===e.target.dataset.player)) voiceTest.aliases[e.target.dataset.player]=e.target.value.split(',').map(v=>v.trim()).filter(Boolean).slice(0,8);
+      return;
+    }
+    if (action==='voice-test-team') {
+      if (!isAdmin() || voiceTest.enabled || !['light','dark'].includes(e.target.value)) return;
+      voiceTestLineupPlayers();
+      if (activePlayers().some(p=>p.id===e.target.dataset.player)) voiceTest.lineup[e.target.dataset.player]=e.target.value;
+      render();
+      return;
+    }
     if (action==='select-match' && e.target.value) selectMatch(e.target.value);
     if (action==='member-player') {
       if(!isAdmin()) throw new Error('Réservé aux administrateurs.');
@@ -1861,7 +1874,7 @@ async function startVoiceMode() {
   if (!voice.recognition) {
     const recognition = new SpeechRecognitionCtor();
     recognition.lang = 'fr-CA';
-    recognition.vocabulary = activePlayers().map(p => playerName(p));
+    recognition.vocabulary = voiceRecognitionVocabulary(voiceLineupPlayers());
     recognition.continuous = true;
     recognition.interimResults = true;
     recognition.maxAlternatives = 3;
@@ -1941,7 +1954,7 @@ function startVoiceRecognition() {
   if (!voice.enabled || !voice.recognition || voice.running) return;
   try {
     voice.startedAt = Date.now();
-    voice.recognition.vocabulary = activePlayers().map(p => playerName(p));
+    voice.recognition.vocabulary = voiceRecognitionVocabulary(voiceLineupPlayers());
     voice.recognition.start();
   } catch (err) {
     if (err?.name !== 'InvalidStateError') {
@@ -2061,6 +2074,7 @@ function updateVoiceTeamContext(holder, team) {
 }
 
 function resetVoiceDetailCollector(holder) {
+  holder.pendingProposal = null;
   clearTimeout(holder.detailProcessTimer);
   holder.detailProcessTimer = null;
   holder.detailSegments = {};
@@ -2128,7 +2142,22 @@ function captureVoiceGoalMoment(team=null) {
 async function processVoiceGoalAlternatives(options) {
   if (!voice.enabled || voice.phase !== 'details') return;
 
+  const pending = voice.pendingProposal;
+  const answer = normalizeSpeechText(options[0] || '');
+  const confirmed = !!pending && /^(?:oui|oui confirme|confirme|confirmer|oui c est ca|exact|exactement)$/.test(answer);
+  if (pending && /^(?:non|annule|annuler|cancel)$/.test(answer)) {
+    resetVoiceDetailCollector(voice);
+    resetVoiceToListening('But annulé. Redis « but pâles » ou « but foncés ».');
+    return;
+  }
+  voice.pendingProposal=null;
+  if (confirmed) options=[pending.text];
   const firstParsed = parseVoiceGoalDetails(options[0] || '');
+  if (confirmed && (!firstParsed.ok || firstParsed.scorerId!==pending.parsed.scorerId || firstParsed.team!==pending.parsed.team || firstParsed.assists.join(',')!==pending.parsed.assists.join(','))) {
+    resetVoiceDetailCollector(voice);
+    setVoiceStatus('Les joueurs ou les alignements ont changé. Répète la commande complète.','error');
+    return;
+  }
   const parses = firstParsed.ok ? options
     .map(text => ({text, parsed:parseVoiceGoalDetails(text)}))
     .filter(x => x.parsed?.ok)
@@ -2150,6 +2179,8 @@ async function processVoiceGoalAlternatives(options) {
     restartVoiceDetailTimeout();
     return;
   }
+
+  if (parses[0].parsed.requiresConfirmation && !confirmed) { requestVoiceProposal(voice,parses[0]); return; }
 
   voice.lastTranscript = parses[0].text;
   updateVoiceHeard(parses[0].text);
@@ -2195,8 +2226,65 @@ function voiceLineupPlayers(team=null) {
   });
 }
 
+// Local lab rosters never read or mutate match assignments.
+function voiceTestLineupPlayers(team=null) {
+  const players = [...activePlayers()].sort((a,b) => playerName(a).localeCompare(playerName(b),'fr-CA') || String(a.id).localeCompare(String(b.id)));
+  if (voiceTest.lineupLeagueId !== state.leagueId || !voiceTest.lineup) {
+    voiceTest.lineupLeagueId = state.leagueId;
+    voiceTest.lineup = {};
+    voiceTest.aliases = {};
+  }
+  for (let i=0;i<players.length;i++) {
+    if (!['light','dark'].includes(voiceTest.lineup[players[i].id])) voiceTest.lineup[players[i].id] = i%2 ? 'dark' : 'light';
+  }
+  return players.filter(player => !team || voiceTest.lineup[player.id] === team).map(player=>({...player,voiceAliases:[...(player.voiceAliases || []),...(voiceTest.aliases?.[player.id] || [])]}));
+}
+
+function voiceRecognitionVocabulary(players) {
+  const names=players.map(player=>playerName(player));
+  const aliases=players.flatMap(player=>Array.isArray(player.voiceAliases)?player.voiceAliases:[]);
+  return [...new Set([...names,...aliases,'oui','non',...names.map(name=>`but ${name}`),...names.map(name=>`assisté de ${name}`)])].slice(0,200);
+}
+
+function voiceNameDistance(a,b) {
+  let row = Array.from({length:b.length+1},(_,i)=>i);
+  for (let i=1;i<=a.length;i++) {
+    const next=[i];
+    for (let j=1;j<=b.length;j++) next[j]=Math.min(next[j-1]+1,row[j]+1,row[j-1]+(a[i-1]===b[j-1]?0:1));
+    row=next;
+  }
+  return row[b.length];
+}
+
+function voiceApproximateAliases(tokens,position,aliases) {
+  // Only propose complete names with at least one unchanged name component.
+  // Every approximate proposal requires explicit confirmation before recording.
+  return aliases.filter(alias => {
+    if (alias.tokens.length < 2 || position+alias.tokens.length > tokens.length) return false;
+    const surname = voiceNameTokens(alias.player.lastName || '');
+    if (!surname.length || alias.text !== voiceNameTokens(playerName(alias.player)).join(' ')) return false;
+    if (!alias.tokens.some((word,i)=>word.length>=3 && tokens[position+i]===word)) return false;
+    const heard=tokens.slice(position,position+alias.tokens.length).join(' ');
+    const distance=voiceNameDistance(heard,alias.text);
+    return distance>0 && distance<=Math.min(2,Math.floor(alias.text.length/4));
+  }).map(alias=>({...alias,length:alias.tokens.length,score:0.8}));
+}
+
+function voiceProposalSummary(parsed) {
+  return `But ${parsed.team ? (parsed.team==='light'?'Pâles':'Foncés')+' · ' : ''}${playerName(parsed.scorer)} · ${parsed.assists.length ? 'aides '+parsed.assists.map(id=>playerName(findPlayer(id))).join(' et ') : 'sans aide'}`;
+}
+
+function requestVoiceProposal(holder,best) {
+  resetVoiceDetailCollector(holder);
+  holder.pendingProposal=best;
+  const message=`À confirmer : ${voiceProposalSummary(best.parsed)}. Dis « oui » pour confirmer, « non » pour annuler, ou répète tous les noms.`;
+  if (holder===voiceTest) setVoiceTestStatus(message,'waiting');
+  else { clearTimeout(voice.detailTimer); setVoiceStatus(message,'waiting'); }
+  voiceBeep('trigger');
+}
+
 function voiceNameTokens(text) {
-  const grammar = new Set(['but','buts','passe','passes','aide','aides','assiste','assistee','assistes','assistees','assister','de','du','des','d','le','la','les','un','une','a','au','aux','et','pis','puis','avec','par','pour']);
+  const grammar = new Set(['but','buts','passe','passes','aide','aides','assiste','assistee','assistes','assistees','assister','de','du','des','d','le','la','les','un','une','a','au','aux','et','pis','puis','avec','par','pour','dans']);
   return normalizeSpeechText(text).split(' ').filter(token => token && !grammar.has(token));
 }
 
@@ -2204,7 +2292,7 @@ function voiceRosterAliases(players) {
   const aliases = [];
   for (const player of players) {
     const first = normalizeSpeechText(player.firstName || '');
-    const names = [playerName(player), first, player.lastName || ''];
+    const names = [playerName(player), first, player.lastName || '', ...(Array.isArray(player.voiceAliases) ? player.voiceAliases : []), ...(player.nickname ? [player.nickname] : [])];
     // A compound first-name abbreviation is usable only if resolution is unique.
     if (first.split(' ').length > 1 && first.split(' ')[0].length >= 3) names.push(first.split(' ')[0]);
     const seen = new Set();
@@ -2226,10 +2314,14 @@ function resolveVoiceRosterNames(text, players) {
   for (let position = 0; position < tokens.length;) {
     let matches = aliases.filter(alias => alias.tokens.every((token,index) => tokens[position+index] === token))
       .map(alias => ({...alias, length:alias.tokens.length, score:1}));
+    const approximate = voiceApproximateAliases(tokens,position,aliases);
+    const exactLength = matches.length ? Math.max(...matches.map(match=>match.length)) : 0;
+    if (approximate.some(match=>match.length>exactLength)) matches=approximate.filter(match=>match.length>exactLength);
     if (matches.length) {
       const longest = Math.max(...matches.map(match => match.length));
       matches = matches.filter(match => match.length === longest);
     }
+    if (!matches.length) matches = voiceApproximateAliases(tokens,position,aliases);
     if (!matches.length) {
       let end = position+1;
       while (end < tokens.length && !aliases.some(alias => alias.tokens.every((token,index) => tokens[end+index] === token))) end++;
@@ -2278,7 +2370,7 @@ function parseVoiceRosterDetails(text, players) {
   if (assists.includes(selected.id)) return {ok:false,message:`${playerName(selected)} est nommé comme buteur et comme aide. Répète la commande complète.`};
   if (new Set(assists).size !== assists.length) return {ok:false,message:'La même aide a été nommée deux fois. Répète les noms complets des joueurs.'};
   const mentions = [...scorer.mentions,...assistants.mentions];
-  return {ok:true,scorer:selected,scorerId:selected.id,assists,confidence:mentions.reduce((sum,mention)=>sum+mention.score,0)/mentions.length};
+  return {ok:true,scorer:selected,scorerId:selected.id,assists,requiresConfirmation:mentions.some(mention=>mention.score<1),confidence:mentions.reduce((sum,mention)=>sum+mention.score,0)/mentions.length};
 }
 
 function normalizeSpeechText(value) {
@@ -2440,7 +2532,6 @@ function renderVoiceTestLab() {
 
   const supported = !!SpeechRecognitionCtor;
   const active = voiceTest.enabled;
-  const players = activePlayers();
   const status = active || voiceTest.statusKind === 'error'
     ? voiceTest.status
     : supported
@@ -2490,12 +2581,15 @@ function renderVoiceTestLab() {
       <div class="voice-test-instructions">
         <div><span>1</span><p>Dis <strong>« but pâles »</strong> ou <strong>« but foncés »</strong>.</p></div>
         <div><span>2</span><p>Après le bip, dis le buteur puis « passe » et les aides. Les noms sont cherchés <strong>uniquement dans l’équipe annoncée</strong>. Un nom ambigu dans cette équipe demande une précision.</p></div>
-        <div><span>3</span><p>L’app attend environ 2 secondes après la dernière transcription avant d’analyser. Après chaque essai, annonce à nouveau <strong>« but pâles »</strong> ou <strong>« but foncés »</strong>. Le labo utilise les alignements de la partie sélectionnée et n’enregistre aucun point.</p></div>
+        <div><span>3</span><p>L’app attend environ 2 secondes après la dernière transcription avant d’analyser. Après chaque essai, annonce à nouveau <strong>« but pâles »</strong> ou <strong>« but foncés »</strong>. Le labo utilise uniquement les deux alignements fictifs ci-dessous, sans lien avec tes parties. Si un nom a été corrigé, confirme avec « oui » ou annule avec « non ».</p></div>
       </div>
 
       <div class="voice-test-roster">
-        <strong>${players.length} nom${players.length===1?'':'s'} disponible${players.length===1?'':'s'} pour le test</strong>
-        <div>${players.map(p=>`<span>${esc(playerName(p))}</span>`).join('')}</div>
+        <strong>Alignements fictifs · TEST seulement</strong>
+        <p>Répartis automatiquement avec tes joueurs. Déplace-les ou ajoute des surnoms séparés par des virgules avant d’activer le test. Ces réglages restent uniquement dans le labo jusqu’au rechargement.</p>
+        ${['light','dark'].map(team=>`<section class="voice-test-lineup"><h4>${team==='light'?'Pâles':'Foncés'} (${voiceTestLineupPlayers(team).length})</h4>
+          ${voiceTestLineupPlayers(team).map(p=>`<label class="row between"><span>${esc(playerName(p))}</span><select data-change="voice-test-team" data-player="${escAttr(p.id)}" ${active?'disabled':''}><option value="light" ${team==='light'?'selected':''}>Pâles</option><option value="dark" ${team==='dark'?'selected':''}>Foncés</option></select></label><input aria-label="Surnoms pour ${escAttr(playerName(p))}" placeholder="Surnoms pour le test (facultatif)" data-change="voice-test-alias" data-player="${escAttr(p.id)}" value="${escAttr((voiceTest.aliases?.[p.id] || []).join(', '))}" ${active?'disabled':''}>`).join('')}
+        </section>`).join('')}
       </div>
 
       <div class="row between voice-test-history-title">
@@ -2538,7 +2632,7 @@ async function startVoiceTest() {
   if (!voiceTest.recognition) {
     const recognition = new SpeechRecognitionCtor();
     recognition.lang = 'fr-CA';
-    recognition.vocabulary = activePlayers().map(p => playerName(p));
+    recognition.vocabulary = voiceRecognitionVocabulary(voiceTestLineupPlayers());
     recognition.continuous = true;
     recognition.interimResults = true;
     recognition.maxAlternatives = 3;
@@ -2618,7 +2712,7 @@ function startVoiceTestRecognition() {
   if (!voiceTest.enabled || !voiceTest.recognition || voiceTest.running) return;
   try {
     voiceTest.startedAt = Date.now();
-    voiceTest.recognition.vocabulary = activePlayers().map(p => playerName(p));
+    voiceTest.recognition.vocabulary = voiceRecognitionVocabulary(voiceTestLineupPlayers());
     voiceTest.recognition.start();
   } catch (err) {
     if (err?.name !== 'InvalidStateError') {
@@ -2745,7 +2839,22 @@ async function finalizeVoiceTestDetails() {
 async function processVoiceTestAlternatives(options) {
   if (!voiceTest.enabled || voiceTest.phase !== 'details' || voiceTest.pauseAfterResult) return;
 
+  const pending = voiceTest.pendingProposal;
+  const answer = normalizeSpeechText(options[0] || '');
+  const confirmed = !!pending && /^(?:oui|oui confirme|confirme|confirmer|oui c est ca|exact|exactement)$/.test(answer);
+  if (pending && /^(?:non|annule|annuler|cancel)$/.test(answer)) {
+    resetVoiceDetailCollector(voiceTest);
+    voiceTest.phase='idle'; voiceTest.team=null; setVoiceTestStatus('Simulation annulée. Redis « but pâles » ou « but foncés ».','listening');
+    return;
+  }
+  voiceTest.pendingProposal=null;
+  if (confirmed) options=[pending.text];
   const firstParsed = parseVoiceTestDetails(options[0] || '');
+  if (confirmed && (!firstParsed.ok || firstParsed.scorerId!==pending.parsed.scorerId || firstParsed.team!==pending.parsed.team || firstParsed.assists.join(',')!==pending.parsed.assists.join(','))) {
+    resetVoiceDetailCollector(voiceTest);
+    setVoiceTestStatus('Les joueurs ou les alignements ont changé. Répète la commande complète.','error');
+    return;
+  }
   const parses = firstParsed.ok ? options
     .map(value => ({text:value, parsed:parseVoiceTestDetails(value)}))
     .filter(item => item.parsed?.ok)
@@ -2778,6 +2887,7 @@ async function processVoiceTestAlternatives(options) {
   }
 
   const best = parses[0];
+  if (best.parsed.requiresConfirmation && !confirmed) { requestVoiceProposal(voiceTest,best); return; }
   const parsed = best.parsed;
   const assistNames = parsed.assists.map(id=>playerName(findPlayer(id))).filter(Boolean);
   const assistLabel = assistNames.length ? ` · aides ${assistNames.join(' et ')}` : ' · sans aide';
@@ -2812,11 +2922,15 @@ function parseVoiceTestDetails(text) {
 
   const context = voiceTeamContext(normalized,voiceTest.team || null);
   if (!context.ok) return context;
-  if (context.team && !state.currentMatch) return {ok:false,message:'Sélectionne une partie et ses alignements pour tester « but pâles » ou « but foncés ».'};
-  const players = context.team ? voiceLineupPlayers(context.team) : activePlayers();
-  if (!players.length) return {ok:false,message:context.team ? `Aucun joueur n’est assigné chez les ${context.team==='light'?'Pâles':'Foncés'} dans la partie sélectionnée.` : 'Aucun joueur disponible.'};
+  const players = voiceTestLineupPlayers(context.team);
+  if (!players.length) return {ok:false,message:context.team ? `Aucun joueur n’est assigné chez les ${context.team==='light'?'Pâles':'Foncés'} dans les alignements fictifs du labo.` : 'Aucun joueur disponible.'};
   const parsed = parseVoiceRosterDetails(context.text,players);
-  return parsed.ok ? {...parsed,team:context.team} : context.team ? {...parsed,message:`Chez les ${context.team==='light'?'Pâles':'Foncés'} : ${parsed.message}`} : parsed;
+  if (parsed.ok) {
+    const team=context.team || voiceTest.lineup[parsed.scorerId];
+    if (parsed.assists.some(id=>voiceTest.lineup[id]!==team)) return {ok:false,message:'Le buteur et les aides doivent être dans la même équipe fictive. Vérifie les alignements du labo.'};
+    return {...parsed,team};
+  }
+  return context.team ? {...parsed,message:`Chez les ${context.team==='light'?'Pâles':'Foncés'} : ${parsed.message}`} : parsed;
 }
 
 function restartVoiceTestDetailTimeout() {

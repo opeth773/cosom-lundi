@@ -26,7 +26,7 @@ synchroniser la ligue, comme dans la PWA. L'APK ne promet pas un mode hors ligne
 
 ## Installation et connexion Google
 
-Installer `releases/Cosom-Android-1.0.0-preview.5.apk` sur le téléphone. Android peut
+Installer `releases/Cosom-Android-1.0.0-preview.6.apk` sur le téléphone. Android peut
 demander d'autoriser l'installation depuis le navigateur ou le gestionnaire de
 fichiers utilisé. L'APK est signée avec une clé Android dédiée et porte le nom
 **Cosom Android**, pour la distinguer de la PWA installée.
@@ -117,10 +117,26 @@ aides**. Les identifiants complets et l'équipe annoncée sont enregistrés dans
 même but pour les statistiques. Il n'y a pas de point provisoire à annuler. La
 limite de deux aides et la cohérence d'équipe restent vérifiées.
 
-Le labo utilise les alignements de la partie sélectionnée (choisir la partie
-avant d'aller dans Admin), affiche l'équipe simulée et conserve l'écoute. Il ne
-crée aucun but et ne modifie pas le tableau de pointage réel. Le moteur vocal et
-la capture audio ne changent pas dans cette version.
+### Labo indépendant et propositions de noms (version 6)
+
+Le labo crée deux alignements fictifs Pâles et Foncés à partir des joueurs actifs,
+sans lire les alignements d'une partie. Chaque joueur est présent une seule fois.
+Avant d'activer le test, déplacer les joueurs et ajouter, au besoin, des surnoms
+séparés par des virgules. Ces réglages et les résultats restent en mémoire, sont
+réinitialisés au rechargement ou au changement de ligue et ne sont jamais écrits
+dans Firebase. Une partie sélectionnée n'est pas nécessaire. Sans couleur annoncée,
+le labo déduit le côté du buteur et vérifie que ses aides sont du même côté.
+
+Les noms complets comportant une petite erreur de transcription peuvent être
+proposés si une composante du nom reste exacte et qu'un seul joueur correspond
+dans l'équipe. La proposition attend « oui » avant toute validation, ou « non »
+pour annuler. Répéter les noms remplace aussi la proposition. Les noms seuls
+approximatifs ne sont pas devinés ; les candidats multiples restent ambigus.
+Cette règle est générale pour tous les joueurs, sans exception pour un nom précis.
+Elle s'applique également au mode vocal en partie. Les noms et identifiants sont
+revérifiés à la confirmation. Les formulations « assisté de » et « assisté dans »
+sont acceptées. Le moteur reçoit les noms, alias disponibles et phrases d'exemple.
+Le moteur vocal et la capture audio continue restent inchangés.
 
 ## Compiler et tester
 

@@ -1,0 +1,4 @@
+Package Android : ca.cosomlundi.app
+Projet Firebase : cosom-8ab4f
+SHA-1 : 2D:32:37:B5:C0:36:B7:5C:3E:B0:2F:9D:97:82:61:09:9A:CD:60:73
+SHA-256 : 4D:78:B0:7F:E6:69:58:0D:20:80:77:1A:CA:A8:16:23:A2:EF:57:E0:9A:6B:91:0F:A2:F3:14:E9:7A:11:D3:A9

@@ -1,0 +1,12 @@
+{
+  "sourceCommit": "30924e5",
+  "files": {
+    "index.html": "755f4abc3eb996c3af6ec1ef1dee738f1089429af1d9dcb382571235e9541530",
+    "app.js": "b3a35e0ffe569704918c478dfc88814648bad2cf9f7e5891416d4d964e4f8992",
+    "styles.css": "07ab1b7a24d87c2f7a08f3b53c1c181bd537698b7406dbb3698b64628ff83035",
+    "manifest.webmanifest": "a78fa8ed47e54c8b46c97615b396b37687ce70ebe3bc18de4e8b12b0be8c0154",
+    "sw.js": "ee8daaf52d5fc9dd8aa40c90402b56357fe8fb1b0bb4d29a812477cd78d4135c",
+    "icons/icon-192.png": "1bc2395d075950220e85a25628645ec678a1b1cefa1882a3e1fc9f66ddf0a306",
+    "icons/icon-512.png": "581ccc5e7dc21c87b8e2a51be9bacc8226a02982ac62ee1543684e57c84a9ad7"
+  }
+}

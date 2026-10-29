@@ -1,0 +1,39 @@
+name: Prepare French offline speech model
+on:
+  push:
+    branches: [android-native]
+    paths: ['.github/workflows/android-voice-model.yml']
+  workflow_dispatch:
+permissions:
+  contents: write
+jobs:
+  model:
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Download official French model over verified TLS
+        run: |
+          curl --fail --location --retry 2 --output "$RUNNER_TEMP/vosk-model-small-fr-0.22.zip" https://alphacephei.com/vosk/models/vosk-model-small-fr-0.22.zip
+          python3 - <<'PY'
+          import hashlib, os, zipfile
+          from pathlib import Path
+          p=Path(os.environ['RUNNER_TEMP'])/'vosk-model-small-fr-0.22.zip'
+          with zipfile.ZipFile(p) as z:
+              assert z.testzip() is None
+              assert 'vosk-model-small-fr-0.22/am/final.mdl' in z.namelist()
+              assert not any('..' in Path(n).parts or Path(n).is_absolute() for n in z.namelist())
+          digest=hashlib.sha256(p.read_bytes()).hexdigest()
+          (p.parent/'SHA256SUMS').write_text(digest+'  '+p.name+'\n')
+          print('::notice title=French model SHA256::'+digest)
+          PY
+      - uses: softprops/action-gh-release@v2
+        with:
+          tag_name: speech-model-fr-0.22
+          name: French offline voice model — build dependency
+          prerelease: true
+          body: |
+            Unmodified Vosk small French model 0.22, downloaded from https://alphacephei.com/vosk/models/vosk-model-small-fr-0.22.zip over verified TLS.
+            Apache-2.0 model: https://alphacephei.com/vosk/models
+            Build dependency for the separate Android application. Not an APK.
+          files: |
+            ${{ runner.temp }}/vosk-model-small-fr-0.22.zip
+            ${{ runner.temp }}/SHA256SUMS

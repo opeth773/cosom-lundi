@@ -17,6 +17,10 @@ import android.webkit.WebResourceResponse;
 import android.webkit.WebSettings;
 import android.webkit.WebView;
 import android.webkit.WebViewClient;
+import android.webkit.WebChromeClient;
+import android.webkit.JsResult;
+import android.webkit.JsPromptResult;
+import android.widget.EditText;
 import android.widget.FrameLayout;
 import android.widget.Toast;
 import androidx.webkit.WebViewAssetLoader;
@@ -72,6 +76,29 @@ public final class MainActivity extends ComponentActivity {
         settings.setMixedContentMode(WebSettings.MIXED_CONTENT_NEVER_ALLOW);
         settings.setMediaPlaybackRequiresUserGesture(true);
         WebView.setWebContentsDebuggingEnabled(BuildConfig.DEBUG);
+        // Match the browser's confirmation behavior for deletes, match endings,
+        // and other existing PWA actions. A bare WebView dismisses these dialogs.
+        web.setWebChromeClient(new WebChromeClient() {
+            @Override public boolean onJsAlert(WebView view, String url, String message, JsResult result) {
+                new AlertDialog.Builder(MainActivity.this).setTitle("Cosom").setMessage(message)
+                    .setPositiveButton("OK", (d,w) -> result.confirm()).setOnCancelListener(d -> result.cancel()).show();
+                return true;
+            }
+            @Override public boolean onJsConfirm(WebView view, String url, String message, JsResult result) {
+                new AlertDialog.Builder(MainActivity.this).setTitle("Cosom").setMessage(message)
+                    .setPositiveButton("Confirmer", (d,w) -> result.confirm())
+                    .setNegativeButton("Annuler", (d,w) -> result.cancel()).setOnCancelListener(d -> result.cancel()).show();
+                return true;
+            }
+            @Override public boolean onJsPrompt(WebView view, String url, String message, String initial, JsPromptResult result) {
+                EditText input = new EditText(MainActivity.this);
+                input.setText(initial);
+                new AlertDialog.Builder(MainActivity.this).setTitle("Cosom").setMessage(message).setView(input)
+                    .setPositiveButton("Confirmer", (d,w) -> result.confirm(input.getText().toString()))
+                    .setNegativeButton("Annuler", (d,w) -> result.cancel()).setOnCancelListener(d -> result.cancel()).show();
+                return true;
+            }
+        });
 
         WebViewAssetLoader loader = new WebViewAssetLoader.Builder().setDomain("cosomlundi.web.app")
             .addPathHandler("/", new WebViewAssetLoader.AssetsPathHandler(this)).build();

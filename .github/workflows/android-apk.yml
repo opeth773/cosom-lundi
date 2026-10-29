@@ -25,13 +25,9 @@ jobs:
         id: node
         with:
           node-version: '22'
-      - uses: android-actions/setup-android@v3
-        id: android
-        with:
-          cmdline-tools-version: '13114758'
       - name: Install pinned Android SDK
         id: sdk
-        run: sdkmanager 'platforms;android-36' 'build-tools;35.0.0'
+        run: python3 android/tools/setup-ci-sdk.py
       - name: Test Android adapters and league behavior
         id: tests
         working-directory: android

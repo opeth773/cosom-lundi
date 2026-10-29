@@ -27,7 +27,7 @@ synchroniser la ligue, comme dans la PWA. L'APK ne promet pas un mode hors ligne
 
 ## Installation et connexion Google
 
-Installer `releases/Cosom-Android-1.0.0-preview.1.apk` sur le téléphone. Android peut
+Installer `releases/Cosom-Android-1.0.0-preview.2.apk` sur le téléphone. Android peut
 demander d'autoriser l'installation depuis le navigateur ou le gestionnaire de
 fichiers utilisé. L'APK est signée avec une clé Android dédiée et porte le nom
 **Cosom Android**, pour la distinguer de la PWA installée.
@@ -51,6 +51,13 @@ de debug générées en CI n'ont pas la signature de l'APK installable ci-dessus
 ne peuvent pas la remplacer directement.
 
 ## Commandes vocales Android
+
+La version `1.0.0-preview.2` corrige l'arrêt prématuré lors des reprises du micro :
+les événements d'une ancienne session sont ignorés avant son annulation, le
+silence relance l'écoute et les erreurs Android transitoires sont réessayées avec
+un délai. Le laboratoire reprend aussi une session interrompue sans résultat.
+Une simulation terminée conserve sa pause volontaire et le bouton de relance.
+Cette mise à jour porte le code de version 2 et conserve le certificat original.
 
 Le mode vocal de match et le laboratoire admin utilisent `SpeechRecognizer`
 d'Android en **français canadien (`fr-CA`)**, avec résultats partiels et plusieurs

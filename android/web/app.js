@@ -2619,6 +2619,13 @@ async function startVoiceTest() {
         return;
       }
 
+      if (window.CosomAndroid) {
+        scheduleVoiceRestart(voiceTest, startVoiceTestRecognition, setVoiceTestStatus, () => {
+          stopVoiceTest('Le service vocal Android ne répond pas. Vérifie la connexion et le service vocal du téléphone.', true);
+        });
+        return;
+      }
+
       // Le labo est volontairement un essai à la fois : aucune boucle infinie
       // de redémarrage du micro lorsqu’aucune commande n’est entendue.
       voiceTest.pauseAfterResult = true;

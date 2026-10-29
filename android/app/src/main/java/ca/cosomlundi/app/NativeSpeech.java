@@ -25,6 +25,8 @@ final class NativeSpeech {
     private int silenceCount;
     private boolean continuous;
     private boolean stopping;
+    private boolean started;
+    private int recoveryCount;
     private boolean awaitingPermission;
     private boolean resumeAfterPermission;
 
@@ -36,6 +38,8 @@ final class NativeSpeech {
         config = options;
         continuous = options.optBoolean("continuous");
         stopping = false;
+        started = false;
+        recoveryCount = 0;
         silenceCount = 0;
         if (!SpeechRecognizer.isRecognitionAvailable(activity)) {
             fail("service-not-allowed", "Installe ou active le service vocal Google dans les paramètres Android.");
@@ -61,15 +65,15 @@ final class NativeSpeech {
 
     private void begin(boolean first) {
         if (id == null || !activity.isForeground()) { abort(); return; }
-        destroyEngine();
         final int token = ++generation;
+        destroyEngine();
         try {
             engine = SpeechRecognizer.createSpeechRecognizer(activity);
             engine.setRecognitionListener(new RecognitionListener() {
                 private boolean current() { return id != null && token == generation; }
                 @Override public void onReadyForSpeech(Bundle params) {
                     if (!current()) return;
-                    if (first) emit("start");
+                    if (!started) { started = true; emit("start"); }
                     emit("audiostart");
                 }
                 @Override public void onBeginningOfSpeech() { if (current()) emit("speechstart"); }
@@ -82,6 +86,7 @@ final class NativeSpeech {
                     if (!current()) return;
                     result(results, true);
                     silenceCount = 0;
+                    recoveryCount = 0;
                     next(token, 350);
                 }
                 @Override public void onError(int error) {
@@ -91,6 +96,16 @@ final class NativeSpeech {
                         return;
                     }
                     if (stopping) { end(); return; }
+                    if (continuous && (error == SpeechRecognizer.ERROR_CLIENT
+                            || error == SpeechRecognizer.ERROR_RECOGNIZER_BUSY
+                            || error == SpeechRecognizer.ERROR_SERVER_DISCONNECTED
+                            || error == SpeechRecognizer.ERROR_NETWORK
+                            || error == SpeechRecognizer.ERROR_NETWORK_TIMEOUT
+                            || error == SpeechRecognizer.ERROR_SERVER
+                            || error == SpeechRecognizer.ERROR_TOO_MANY_REQUESTS) && ++recoveryCount <= 4) {
+                        next(token, Math.min(8000, recoveryCount * 1000));
+                        return;
+                    }
                     String code = switch (error) {
                         case SpeechRecognizer.ERROR_INSUFFICIENT_PERMISSIONS -> "not-allowed";
                         case SpeechRecognizer.ERROR_AUDIO -> "audio-capture";
@@ -113,7 +128,9 @@ final class NativeSpeech {
 
     private void next(int token, int delay) {
         if (stopping || !continuous) { end(); return; }
-        handler.postDelayed(() -> { if (id != null && token == generation) begin(false); }, delay);
+        if (token != generation) return;
+        final int retired = ++generation;
+        handler.postDelayed(() -> { if (id != null && retired == generation) begin(false); }, delay);
     }
 
     private void result(Bundle results, boolean isFinal) {
@@ -134,6 +151,7 @@ final class NativeSpeech {
     void stop(String requestedId) {
         if (id == null || !id.equals(requestedId)) return;
         stopping = true;
+        handler.removeCallbacksAndMessages(null);
         if (engine != null) engine.stopListening(); else end();
         int token = generation;
         handler.postDelayed(() -> { if (id != null && token == generation) end(); }, 1500);
@@ -142,16 +160,23 @@ final class NativeSpeech {
     void abort(String requestedId) { if (id != null && id.equals(requestedId)) abort(); }
     void abort() { if (id != null) end(); else destroyEngine(); }
     private void end() {
-        if (id != null) emit("end");
+        String endedId = id;
         id = null;
         awaitingPermission = false;
         resumeAfterPermission = false;
         ++generation;
         handler.removeCallbacksAndMessages(null);
         destroyEngine();
+        if (endedId != null) {
+            JSONObject ended = new JSONObject();
+            try { ended.put("channel", "speech"); ended.put("id", endedId); ended.put("type", "end"); } catch (Exception ignored) {}
+            activity.send(ended);
+        }
     }
     private void destroyEngine() {
-        if (engine != null) { engine.cancel(); engine.destroy(); engine = null; }
+        SpeechRecognizer previous = engine;
+        engine = null;
+        if (previous != null) { previous.cancel(); previous.destroy(); }
     }
     private void fail(String code, String message) {
         JSONObject event = event("error");

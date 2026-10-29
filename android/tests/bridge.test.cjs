@@ -103,3 +103,30 @@ test('Android project never references the PWA directory as a build input', () =
   assert.match(gradle, /assets.srcDir\("\.\.\/web"\)/);
   assert.doesNotMatch(gradle, /public\//);
 });
+
+test('Android admin lab resumes unexpected ends while preserving explicit pause and permission denial', async () => {
+  const source=fs.readFileSync(path.join(__dirname,'../web/app.js'),'utf8');
+  const start=source.indexOf('async function startVoiceTest()');
+  const code=source.slice(start,source.indexOf('\nfunction startVoiceTestRecognition',start));
+  let restarts=0;
+  const voiceTest={enabled:false,recognition:null};
+  const ctx=vm.createContext({window:{CosomAndroid:{}},voiceTest,voice:{enabled:false},
+    isAdmin:()=>true,activePlayers:()=>[{}],unlockAudio:async()=>{},resetVoiceDetailCollector:()=>{},
+    setVoiceTestStatus:()=>{},render:()=>{},SpeechRecognitionCtor:function(){},
+    startVoiceTestRecognition:()=>restarts++,
+    stopVoiceTest:()=>{voiceTest.enabled=false;},
+    scheduleVoiceRestart:(holder,start)=>start()});
+  vm.runInContext(code,ctx);
+  await ctx.startVoiceTest();
+  assert.equal(restarts,1);
+  voiceTest.recognition.onend();
+  assert.equal(restarts,2);
+  assert.equal(voiceTest.pauseAfterResult,false);
+  voiceTest.pauseAfterResult=true;
+  voiceTest.recognition.onend();
+  assert.equal(restarts,2);
+  voiceTest.pauseAfterResult=false;
+  voiceTest.recognition.onerror({error:'not-allowed'});
+  voiceTest.recognition.onend();
+  assert.equal(restarts,2);
+});

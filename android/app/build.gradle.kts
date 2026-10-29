@@ -14,10 +14,11 @@ android {
         applicationId = "ca.cosomlundi.app"
         minSdk = 26
         targetSdk = 36
-        versionCode = 1
-        versionName = "1.0.0-preview.1"
+        versionCode = 2
+        versionName = "1.0.0-preview.2"
         buildConfigField("String", "GOOGLE_WEB_CLIENT_ID", "\"$googleClient\"")
     }
+    testOptions { unitTests.isIncludeAndroidResources = true }
     buildFeatures { buildConfig = true }
     compileOptions {
         sourceCompatibility = JavaVersion.VERSION_17
@@ -47,7 +48,15 @@ val verifyReleaseSigning by tasks.registering {
     }
 }
 tasks.matching { it.name == "preReleaseBuild" }.configureEach { dependsOn(verifyReleaseSigning) }
+tasks.withType<Test>().configureEach {
+    systemProperty("robolectric.dependency.repo.url", "https://repo.maven.apache.org/maven2")
+    listOf("https.proxyHost", "https.proxyPort", "http.proxyHost", "http.proxyPort", "http.nonProxyHosts").forEach { name ->
+        System.getProperty(name)?.let { systemProperty(name, it) }
+    }
+}
 dependencies {
+    testImplementation("junit:junit:4.13.2")
+    testImplementation("org.robolectric:robolectric:4.14.1")
     implementation("androidx.activity:activity:1.11.0")
     implementation("androidx.webkit:webkit:1.14.0")
     implementation("androidx.credentials:credentials:1.5.0")

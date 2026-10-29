@@ -12,25 +12,40 @@ permissions:
 
 jobs:
   verify:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-java@v4
+      - uses: actions/checkout@v5
+        id: checkout
+      - uses: actions/setup-java@v5
+        id: java
         with:
           distribution: temurin
           java-version: '21'
       - uses: actions/setup-node@v4
+        id: node
         with:
           node-version: '22'
       - uses: android-actions/setup-android@v3
+        id: android
+        with:
+          cmdline-tools-version: '13114758'
       - name: Install pinned Android SDK
+        id: sdk
         run: sdkmanager 'platforms;android-36' 'build-tools;35.0.0'
       - name: Test Android adapters and league behavior
+        id: tests
         working-directory: android
         run: node --test tests/*.test.cjs
       - name: Compile and lint Android
+        id: build
         working-directory: android
-        run: ./gradlew --no-daemon assembleDebug lintDebug
+        run: |
+          if ! ./gradlew --no-daemon assembleDebug lintDebug > "$RUNNER_TEMP/cosom-build.log" 2>&1; then
+            cat "$RUNNER_TEMP/cosom-build.log"
+            node -e 'const fs=require("node:fs"),util=require("node:util"); for(const line of util.stripVTControlCharacters(fs.readFileSync(process.argv[1],"utf8")).split("\n").filter(line=>/error|failed|exception|not found/i.test(line)).slice(-12)) console.log("::error title=Android build::"+line.replaceAll("%","%25").replaceAll("\r","%0D"));' "$RUNNER_TEMP/cosom-build.log"
+            exit 1
+          fi
+          cat "$RUNNER_TEMP/cosom-build.log"
       - name: Verify installable APK checksum
         working-directory: android/releases
         run: sha256sum --check SHA256SUMS
@@ -44,15 +59,20 @@ jobs:
             android/releases/SHA256SUMS
             android/signing-certificate.txt
           if-no-files-found: error
+      - name: Identify failed Android setup step
+        if: failure()
+        env:
+          STEP_RESULTS: ${{ toJSON(steps) }}
+        run: node -e 'for(const [id,step] of Object.entries(JSON.parse(process.env.STEP_RESULTS))) if(step.outcome==="failure") console.log("::error title=Android CI::Failed step - "+id)'
 
   publish-apk:
     if: startsWith(github.ref, 'refs/tags/android-v')
     needs: verify
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     permissions:
       contents: write
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
       - uses: softprops/action-gh-release@v2
         with:
           name: Cosom Android 1.0.0 — preview

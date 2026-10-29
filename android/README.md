@@ -26,7 +26,7 @@ synchroniser la ligue, comme dans la PWA. L'APK ne promet pas un mode hors ligne
 
 ## Installation et connexion Google
 
-Installer `releases/Cosom-Android-1.0.0-preview.4.apk` sur le téléphone. Android peut
+Installer `releases/Cosom-Android-1.0.0-preview.5.apk` sur le téléphone. Android peut
 demander d'autoriser l'installation depuis le navigateur ou le gestionnaire de
 fichiers utilisé. L'APK est signée avec une clé Android dédiée et porte le nom
 **Cosom Android**, pour la distinguer de la PWA installée.
@@ -97,6 +97,30 @@ L'archive du modèle est épinglée par SHA-256 dans `voice-model.json` et prép
 par `tools/prepare_voice_model.py`. Le modèle et Vosk sont sous Apache-2.0 ; la
 licence est embarquée dans l'APK. L'augmentation de taille de l'APK est due au
 modèle et aux bibliothèques natives, pas aux données de la ligue.
+
+### Commandes par équipe et validation des noms (version 5)
+
+Dire « but pâles » ou « but foncés », attendre le bip puis dicter le buteur et les
+passes, ou dire toute la phrase d'un coup. « Ajouter un but » reste accepté.
+L'équipe et le temps du but sont conservés entre le déclencheur et les noms.
+
+Les noms sont cherchés **seulement dans l'alignement de l'équipe annoncée** pour
+la partie sélectionnée. Un prénom partagé dans la ligue n'est pas ambigu s'il
+identifie un seul joueur dans cette équipe. Les noms complets et noms de famille
+uniques sont acceptés. Une ambiguïté entre joueurs de la même équipe demande une
+précision et affiche les candidats. Une aide inconnue ou ambiguë bloque toute la
+commande ; une autre transcription qui l'omet ne permet pas de valider un but
+partiel. Les noms approximatifs ne sont pas attribués automatiquement.
+
+Le tableau de pointage augmente uniquement **après validation du buteur et des
+aides**. Les identifiants complets et l'équipe annoncée sont enregistrés dans le
+même but pour les statistiques. Il n'y a pas de point provisoire à annuler. La
+limite de deux aides et la cohérence d'équipe restent vérifiées.
+
+Le labo utilise les alignements de la partie sélectionnée (choisir la partie
+avant d'aller dans Admin), affiche l'équipe simulée et conserve l'écoute. Il ne
+crée aucun but et ne modifie pas le tableau de pointage réel. Le moteur vocal et
+la capture audio ne changent pas dans cette version.
 
 ## Compiler et tester
 

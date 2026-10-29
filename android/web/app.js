@@ -1803,7 +1803,7 @@ function renderVoiceScoring(current) {
     !supported
       ? 'Reconnaissance vocale non disponible dans ce navigateur.'
       : live
-        ? 'Prêt. Active le micro puis dis « Ajouter un but ».'
+        ? 'Prêt. Active le micro puis annonce « but pâles » ou « but foncés ».'
         : 'Le mode vocal devient disponible dès que la partie est démarrée.'
   );
   const kind = active || voice.statusKind === 'error' ? voice.statusKind : (!supported ? 'error' : 'idle');
@@ -1816,7 +1816,7 @@ function renderVoiceScoring(current) {
         <div class="grow">
           <div class="voice-kicker">TABLE DE MARQUE VOCALE</div>
           <h3 class="voice-title">Ajouter les buts à la voix</h3>
-          <p class="voice-help">Dis <strong>« Ajouter un but »</strong>, attends le bip, puis par exemple <strong>« Jonathan, assisté de Marc et Alex »</strong>.</p>
+          <p class="voice-help">Dis <strong>« but pâles »</strong> ou <strong>« but foncés »</strong>, attends le bip, puis donne le buteur et les aides. Un prénom suffit s’il est unique dans cette équipe ; sinon, utilise le nom complet ou un nom de famille unique. Le point est ajouté après validation.</p>
         </div>
         <button type="button" class="btn ${active?'danger':'primary'} voice-toggle" data-action="toggle-voice" ${disabled?'disabled':''}>${buttonLabel}</button>
       </div>
@@ -1856,7 +1856,7 @@ async function startVoiceMode() {
   voice.captured = null;
   voice.lastTranscript = '';
   resetVoiceDetailCollector(voice);
-  setVoiceStatus('Micro actif — dis « Ajouter un but ».', 'listening');
+  setVoiceStatus('Micro actif — dis « but pâles » ou « but foncés ».', 'listening');
 
   if (!voice.recognition) {
     const recognition = new SpeechRecognitionCtor();
@@ -1873,7 +1873,7 @@ async function startVoiceMode() {
       if (voice.enabled) setVoiceStatus(
         voice.phase === 'details'
           ? 'Je t’écoute : dis le buteur puis les aides.'
-          : 'Micro actif — dis « Ajouter un but ».',
+          : 'Micro actif — dis « but pâles » ou « but foncés ».',
         voice.phase === 'details' ? 'waiting' : 'listening'
       );
     };
@@ -2000,7 +2000,7 @@ async function handleVoiceRecognitionResult(event) {
         .find(x => x.hit);
 
       if (triggered) {
-        captureVoiceGoalMoment();
+        captureVoiceGoalMoment(triggered.hit.team);
         const remainder = triggered.normalized.slice(triggered.hit.end).trim();
         if (remainder) {
           voice.lastTranscript = remainder;
@@ -2016,6 +2016,7 @@ async function handleVoiceRecognitionResult(event) {
 
     if (voice.phase === 'details') {
       const hit = findVoiceTrigger(normalizedPrimary);
+      updateVoiceTeamContext(voice,hit?.team);
       const detailText = (hit ? normalizedPrimary.slice(hit.end) : normalizedPrimary).trim();
       if (!detailText) continue;
 
@@ -2037,9 +2038,26 @@ async function handleVoiceRecognitionResult(event) {
 }
 
 function findVoiceTrigger(text) {
-  const match = String(text || '').match(/\b(ajouter|ajoute|ajoutez)\s+un\s+but\b/);
+  const match = normalizeSpeechText(text).match(/\b(?:(?:ajouter|ajoute|ajoutez)\s+un\s+but(?:\s+(?:(?:pour|des|les|de|l|equipe|chez)\s+)*(pales?|fonces?))?|but\s+(?:(?:pour|des|les|de|l|equipe|chez)\s+)*(pales?|fonces?))\b/);
   if (!match) return null;
-  return {start:match.index, end:match.index + match[0].length};
+  const color = match[1] || match[2] || '';
+  return {start:match.index,end:match.index+match[0].length,team:color.startsWith('pale')?'light':color.startsWith('fonce')?'dark':null};
+}
+
+function voiceTeamContext(text, savedTeam=null) {
+  const normalized = normalizeSpeechText(text);
+  const hit = findVoiceTrigger(normalized);
+  const declared = hit?.start === 0 ? hit.team : null;
+  if (declared && savedTeam && declared !== savedTeam) return {ok:false,message:'L’équipe annoncée a changé. Redis « but pâles » ou « but foncés », puis les noms.'};
+  return {ok:true,team:declared || savedTeam,text:hit?.start === 0 ? normalized.slice(hit.end).trim() : normalized};
+}
+
+function updateVoiceTeamContext(holder, team) {
+  if (!team) return;
+  const previous = holder === voice ? holder.captured?.team : holder.team;
+  if (previous && previous !== team) resetVoiceDetailCollector(holder);
+  if (holder === voice && holder.captured) holder.captured.team = team;
+  else if (holder === voiceTest) holder.team = team;
 }
 
 function resetVoiceDetailCollector(holder) {
@@ -2079,7 +2097,7 @@ async function finalizeVoiceGoalDetails() {
   await processVoiceGoalAlternatives([text]);
 }
 
-function captureVoiceGoalMoment() {
+function captureVoiceGoalMoment(team=null) {
   if (!state.currentMatch || state.currentMatch.id !== voice.matchId) return;
 
   const periodSeconds = Number(state.currentMatch.periodSeconds || state.league?.settings?.periodMinutes * 60 || 1200);
@@ -2089,19 +2107,20 @@ function captureVoiceGoalMoment() {
   resetVoiceDetailCollector(voice);
   voice.captured = {
     matchId: state.currentMatch.id,
+    team,
     period: Number(state.currentMatch.period || 1),
     periodSeconds,
     clockRemainingSeconds: remaining,
     capturedAt: Date.now()
   };
   voice.lastTranscript = '';
-  setVoiceStatus(`But détecté à ${formatClock(remaining)} — dis le buteur et les aides.`, 'waiting');
+  setVoiceStatus(`But${team ? (team==='light'?' Pâles':' Foncés') : ''} détecté à ${formatClock(remaining)} — dis le buteur et les aides.`, 'waiting');
   voiceBeep('trigger');
 
   clearTimeout(voice.detailTimer);
   voice.detailTimer = setTimeout(() => {
     if (!voice.enabled || voice.phase !== 'details') return;
-    resetVoiceToListening('Je n’ai rien entendu. Redis « Ajouter un but ».', 'error');
+    resetVoiceToListening('Je n’ai rien entendu. Redis « but pâles » ou « but foncés ».', 'error');
     voiceBeep('error');
   }, 10000);
 }
@@ -2109,14 +2128,16 @@ function captureVoiceGoalMoment() {
 async function processVoiceGoalAlternatives(options) {
   if (!voice.enabled || voice.phase !== 'details') return;
 
-  const parses = options
+  const firstParsed = parseVoiceGoalDetails(options[0] || '');
+  const parses = firstParsed.ok ? options
     .map(text => ({text, parsed:parseVoiceGoalDetails(text)}))
     .filter(x => x.parsed?.ok)
-    .sort((a,b) => b.parsed.confidence - a.parsed.confidence);
+    .sort((a,b) => b.parsed.confidence - a.parsed.confidence) : [];
+  const identities = new Set(parses.map(p => `${p.parsed.scorerId}|${p.parsed.assists.slice().sort().join(',')}`));
 
-  if (!parses.length) {
+  if (!parses.length || identities.size > 1) {
     const first = options[0] || '';
-    const fallback = parseVoiceGoalDetails(first);
+    const fallback = identities.size > 1 ? {message:'Plusieurs interprétations désignent des joueurs différents. Répète tous les noms complets ; aucun but ne sera enregistré.'} : firstParsed;
     if (fallback?.cancelled) {
       resetVoiceDetailCollector(voice);
       return;
@@ -2146,148 +2167,118 @@ function parseVoiceGoalDetails(text) {
   if (!normalized) return {ok:false, message:'Je n’ai rien entendu après la commande.'};
 
   if (/\b(annule|annuler|cancel)\b/.test(normalized)) {
-    resetVoiceToListening('But annulé avant l’enregistrement. Redis « Ajouter un but ».');
+    resetVoiceToListening('But annulé avant l’enregistrement. Redis « but pâles » ou « but foncés ».');
     voiceBeep('error');
     return {ok:false, cancelled:true, message:'Commande annulée.'};
   }
 
-  const lineup = voiceLineupPlayers();
-  if (!lineup.length) return {ok:false, message:'Aucun joueur n’est dans l’alignement.'};
+  const context = voiceTeamContext(normalized,voice.captured?.team || null);
+  if (!context.ok) return context;
+  const lineup = voiceLineupPlayers(context.team);
+  if (!lineup.length) return {ok:false, message:context.team ? `Aucun joueur n’est assigné chez les ${context.team==='light'?'Pâles':'Foncés'}. Vérifie l’alignement de cette partie.` : 'Aucun joueur n’est dans l’alignement.'};
 
-  const mentions = findVoicePlayerMentions(normalized, lineup);
-  if (!mentions.length) {
-    return {ok:false, message:'Je n’ai reconnu aucun joueur de l’alignement. Répète le nom du buteur.'};
+  const parsed = parseVoiceRosterDetails(context.text,lineup);
+  if (!parsed.ok) return context.team ? {...parsed,message:`Chez les ${context.team==='light'?'Pâles':'Foncés'} : ${parsed.message}`} : parsed;
+  const team = state.assignments.get(parsed.scorerId)?.team;
+  if (!['dark','light'].includes(team)) return {ok:false,message:`${playerName(parsed.scorer)} n’est pas assigné à une équipe.`};
+  for (const id of parsed.assists) {
+    if (state.assignments.get(id)?.team !== team) return {ok:false,message:`${playerName(findPlayer(id))} n’est pas dans la même équipe que ${playerName(parsed.scorer)}. Aucun but ne sera enregistré.`};
   }
-
-  const scorer = mentions[0].player;
-  const scorerAssignment = state.assignments.get(scorer.id);
-  const team = scorerAssignment?.team;
-  if (!['dark','light'].includes(team)) {
-    return {ok:false, message:`${playerName(scorer)} n’est pas assigné à une équipe.`};
-  }
-
-  const noAssist = /\b(sans\s+(aide|aides|passe|passes)|aucune?\s+(aide|passe))\b/.test(normalized);
-  const assistMentions = noAssist ? [] : mentions.slice(1);
-
-  if (assistMentions.length > 2) {
-    return {ok:false, message:'J’ai entendu plus de deux aides. Répète avec maximum deux aides.'};
-  }
-
-  const assists = [];
-  for (const mention of assistMentions) {
-    if (mention.player.id === scorer.id) continue;
-    const assignment = state.assignments.get(mention.player.id);
-    if (assignment?.team !== team) {
-      return {ok:false, message:`${playerName(mention.player)} n’est pas dans la même équipe que ${playerName(scorer)}.`};
-    }
-    if (!assists.includes(mention.player.id)) assists.push(mention.player.id);
-  }
-
-  const confidence = mentions.slice(0, 1 + assists.length).reduce((sum,m)=>sum+m.score,0) / Math.max(1,1+assists.length);
-  return {ok:true, scorer, scorerId:scorer.id, team, assists, confidence};
+  return {...parsed,team};
 }
 
-function voiceLineupPlayers() {
+function voiceLineupPlayers(team=null) {
+  const assignments = matchAssignments();
   return activePlayers().filter(p => {
-    const assignment = state.assignments.get(p.id);
-    return assignment && (assignment.team === 'dark' || assignment.team === 'light');
+    const assignment = assignments.get(p.id);
+    return assignment && (assignment.team === 'dark' || assignment.team === 'light') && (!team || assignment.team === team);
   });
 }
 
-function findVoicePlayerMentions(text, players) {
-  const normalized = normalizeSpeechText(text);
-  const ignoredWords = new Set(['assiste','assistee','assister','aide','aides','passe','passes','avec','sans','et','pis','par','pour','aucun','aucune']);
-  const tokens = normalized.split(' ').filter(Boolean).filter(token => !ignoredWords.has(token));
-  if (!tokens.length) return [];
+function voiceNameTokens(text) {
+  const grammar = new Set(['but','buts','passe','passes','aide','aides','assiste','assistee','assistes','assistees','assister','de','du','des','d','le','la','les','un','une','a','au','aux','et','pis','puis','avec','par','pour']);
+  return normalizeSpeechText(text).split(' ').filter(token => token && !grammar.has(token));
+}
 
-  const firstCounts = new Map();
-  const lastCounts = new Map();
-  for (const p of players) {
-    const first = normalizeSpeechText(p.firstName || '');
-    const last = normalizeSpeechText(p.lastName || '');
-    if (first) firstCounts.set(first, (firstCounts.get(first) || 0) + 1);
-    if (last) lastCounts.set(last, (lastCounts.get(last) || 0) + 1);
-  }
-
-  const candidates = [];
+function voiceRosterAliases(players) {
+  const aliases = [];
   for (const player of players) {
     const first = normalizeSpeechText(player.firstName || '');
-    const last = normalizeSpeechText(player.lastName || '');
-    const full = normalizeSpeechText(playerName(player));
-    const aliases = [];
-
-    if (full) aliases.push({text:full, weight:0.08});
-    if (first && first.length >= 3 && firstCounts.get(first) === 1) aliases.push({text:first, weight:0});
-    if (last && last.length >= 3 && lastCounts.get(last) === 1) aliases.push({text:last, weight:0});
-
-    let best = null;
-    for (const alias of aliases) {
-      const match = bestVoiceAliasMatch(tokens, alias.text);
-      if (!match) continue;
-      const weighted = Math.min(1, match.score + alias.weight);
-      if (!best || weighted > best.score) best = {...match, score:weighted, alias:alias.text};
-    }
-
-    if (best && best.score >= 0.72) candidates.push({player, ...best});
-  }
-
-  candidates.sort((a,b) => b.score - a.score || a.start - b.start);
-  const used = new Set();
-  const selected = [];
-  for (const c of candidates) {
-    const positions = [];
-    for (let i=c.start; i<c.end; i++) positions.push(i);
-    if (positions.some(i=>used.has(i))) continue;
-    positions.forEach(i=>used.add(i));
-    selected.push(c);
-  }
-
-  return selected.sort((a,b)=>a.start-b.start || b.score-a.score);
-}
-
-function bestVoiceAliasMatch(tokens, alias) {
-  const aliasTokens = alias.split(' ').filter(Boolean);
-  if (!aliasTokens.length) return null;
-
-  let best = null;
-  const sizes = new Set([aliasTokens.length]);
-  if (aliasTokens.length === 2) {
-    sizes.add(1);
-    sizes.add(3);
-  }
-
-  for (const size of sizes) {
-    if (size < 1 || size > tokens.length) continue;
-    for (let i=0; i<=tokens.length-size; i++) {
-      const spoken = tokens.slice(i,i+size).join(' ');
-      const score = speechSimilarity(spoken, alias);
-      if (!best || score > best.score) best = {start:i,end:i+size,score};
+    const names = [playerName(player), first, player.lastName || ''];
+    // A compound first-name abbreviation is usable only if resolution is unique.
+    if (first.split(' ').length > 1 && first.split(' ')[0].length >= 3) names.push(first.split(' ')[0]);
+    const seen = new Set();
+    for (const name of names) {
+      const tokens = voiceNameTokens(name);
+      const text = tokens.join(' ');
+      if (text.length < 2 || seen.has(text)) continue;
+      seen.add(text);
+      aliases.push({player, tokens, text});
     }
   }
-  return best;
+  return aliases;
 }
 
-function speechSimilarity(a,b) {
-  if (!a || !b) return 0;
-  if (a === b) return 1;
-  const max = Math.max(a.length,b.length);
-  if (!max) return 1;
-  return Math.max(0, 1 - levenshteinDistance(a,b) / max);
-}
-
-function levenshteinDistance(a,b) {
-  const prev = Array.from({length:b.length+1},(_,i)=>i);
-  for (let i=1; i<=a.length; i++) {
-    let diagonal = prev[0];
-    prev[0] = i;
-    for (let j=1; j<=b.length; j++) {
-      const saved = prev[j];
-      const cost = a[i-1] === b[j-1] ? 0 : 1;
-      prev[j] = Math.min(prev[j]+1, prev[j-1]+1, diagonal+cost);
-      diagonal = saved;
+function resolveVoiceRosterNames(text, players) {
+  const tokens = voiceNameTokens(text);
+  const aliases = voiceRosterAliases(players);
+  const mentions = [];
+  for (let position = 0; position < tokens.length;) {
+    let matches = aliases.filter(alias => alias.tokens.every((token,index) => tokens[position+index] === token))
+      .map(alias => ({...alias, length:alias.tokens.length, score:1}));
+    if (matches.length) {
+      const longest = Math.max(...matches.map(match => match.length));
+      matches = matches.filter(match => match.length === longest);
     }
+    if (!matches.length) {
+      let end = position+1;
+      while (end < tokens.length && !aliases.some(alias => alias.tokens.every((token,index) => tokens[end+index] === token))) end++;
+      return {ok:false, message:`Nom non reconnu : « ${tokens.slice(position,end).join(' ')} ». Dis le nom complet ou un nom de famille unique. Aucun but ne sera enregistré.`};
+    }
+    const distinct = new Map(matches.map(match => [match.player.id,match]));
+    if (distinct.size > 1) {
+      const spoken = tokens.slice(position,position+matches[0].length).join(' ');
+      const names = [...distinct.values()].map(match => playerName(match.player)).join(' ou ');
+      return {ok:false, message:`Nom ambigu : « ${spoken} » correspond à ${names}. Précise le nom complet ou un nom de famille unique. Aucun but ne sera enregistré.`};
+    }
+    const match = [...distinct.values()][0];
+    mentions.push({player:match.player,score:match.score});
+    position += match.length;
   }
-  return prev[b.length];
+  return {ok:true,mentions};
+}
+
+function parseVoiceRosterDetails(text, players) {
+  const normalized = normalizeSpeechText(text).replace(/^(?:(?:ajouter|ajoute|ajoutez)\s+un\s+but|(?:un\s+)?but)\b\s*/, '');
+  const noAssist = normalized.match(/\b(?:sans|aucun|aucune)\s+(?:aides?|passes?)\b/);
+  const marker = normalized.match(/\b(?:assiste|assistee|assistes|assistees|assister|aides?|passes?)\b/);
+  let scorer, assistants;
+  if (noAssist) {
+    if ((marker && marker.index < noAssist.index) || voiceNameTokens(normalized.slice(noAssist.index+noAssist[0].length)).length) {
+      return {ok:false,message:'Tu as dit « sans aide » et nommé des aides. Répète la commande complète ; aucun but ne sera enregistré.'};
+    }
+    scorer = resolveVoiceRosterNames(normalized.slice(0,noAssist.index),players);
+    assistants = {ok:true,mentions:[]};
+  } else if (marker) {
+    scorer = resolveVoiceRosterNames(normalized.slice(0,marker.index),players);
+    assistants = resolveVoiceRosterNames(normalized.slice(marker.index+marker[0].length),players);
+    if (assistants.ok && !assistants.mentions.length) return {ok:false,message:'Tu as annoncé des passes, mais aucun nom d’aide n’a été donné. Répète les noms complets.'};
+  } else {
+    const all = resolveVoiceRosterNames(normalized,players);
+    if (!all.ok) return all;
+    scorer = {ok:true,mentions:all.mentions.slice(0,1)};
+    assistants = {ok:true,mentions:all.mentions.slice(1)};
+  }
+  if (!scorer.ok) return scorer;
+  if (!assistants.ok) return assistants;
+  if (scorer.mentions.length !== 1) return {ok:false,message:'Précise un seul buteur avant les passes, avec son nom complet ou un nom de famille unique.'};
+  if (assistants.mentions.length > 2) return {ok:false,message:'Plus de deux aides ont été dictées. Aucun but ne sera enregistré.'};
+  const selected = scorer.mentions[0].player;
+  const assists = assistants.mentions.map(mention => mention.player.id);
+  if (assists.includes(selected.id)) return {ok:false,message:`${playerName(selected)} est nommé comme buteur et comme aide. Répète la commande complète.`};
+  if (new Set(assists).size !== assists.length) return {ok:false,message:'La même aide a été nommée deux fois. Répète les noms complets des joueurs.'};
+  const mentions = [...scorer.mentions,...assistants.mentions];
+  return {ok:true,scorer:selected,scorerId:selected.id,assists,confidence:mentions.reduce((sum,mention)=>sum+mention.score,0)/mentions.length};
 }
 
 function normalizeSpeechText(value) {
@@ -2305,7 +2296,12 @@ function normalizeSpeechText(value) {
 async function commitVoiceGoal(parsed) {
   const captured = voice.captured;
   if (!captured || !state.currentMatch || captured.matchId !== state.currentMatch.id) {
-    resetVoiceToListening('Le match a changé. Redis « Ajouter un but ».', 'error');
+    resetVoiceToListening('Le match a changé. Redis « but pâles » ou « but foncés ».', 'error');
+    return;
+  }
+
+  if (captured.team && captured.team !== parsed.team) {
+    setVoiceStatus('L’équipe du but ne correspond pas à l’équipe annoncée. Répète les noms.', 'error');
     return;
   }
 
@@ -2344,7 +2340,7 @@ async function commitVoiceGoal(parsed) {
 
     setTimeout(() => {
       if (voice.enabled && voice.phase === 'idle') {
-        setVoiceStatus('Micro actif — dis « Ajouter un but ».', 'listening');
+        setVoiceStatus('Micro actif — dis « but pâles » ou « but foncés ».', 'listening');
         voice.lastTranscript = '';
         updateVoiceHeard('');
       }
@@ -2364,12 +2360,12 @@ function restartVoiceDetailTimeout() {
   voice.detailTimer = setTimeout(() => {
     if (!voice.enabled || voice.phase !== 'details') return;
     resetVoiceDetailCollector(voice);
-    resetVoiceToListening('Délai dépassé. Redis « Ajouter un but ».', 'error');
+    resetVoiceToListening('Délai dépassé. Redis « but pâles » ou « but foncés ».', 'error');
     voiceBeep('error');
   }, 12000);
 }
 
-function resetVoiceToListening(message='Micro actif — dis « Ajouter un but ».', kind='listening') {
+function resetVoiceToListening(message='Micro actif — dis « but pâles » ou « but foncés ».', kind='listening') {
   voice.phase = 'idle';
   voice.captured = null;
   clearTimeout(voice.detailTimer);
@@ -2492,9 +2488,9 @@ function renderVoiceTestLab() {
       ${active && voiceTest.lastTranscript ? `<div class="voice-heard voice-test-heard">Entendu : « ${esc(voiceTest.lastTranscript)} »</div>` : ''}
 
       <div class="voice-test-instructions">
-        <div><span>1</span><p>Dis <strong>« Ajouter un but »</strong>.</p></div>
-        <div><span>2</span><p>Après le bip, dis ta phrase au complet : <strong>« Jonathan, assisté de Marc et Alex »</strong>.</p></div>
-        <div><span>3</span><p>L’app attend environ 2 secondes après la dernière transcription avant d’analyser. Après chaque essai, dis à nouveau <strong>« Ajouter un but »</strong>. Le micro reste ouvert.</p></div>
+        <div><span>1</span><p>Dis <strong>« but pâles »</strong> ou <strong>« but foncés »</strong>.</p></div>
+        <div><span>2</span><p>Après le bip, dis le buteur puis « passe » et les aides. Les noms sont cherchés <strong>uniquement dans l’équipe annoncée</strong>. Un nom ambigu dans cette équipe demande une précision.</p></div>
+        <div><span>3</span><p>L’app attend environ 2 secondes après la dernière transcription avant d’analyser. Après chaque essai, annonce à nouveau <strong>« but pâles »</strong> ou <strong>« but foncés »</strong>. Le labo utilise les alignements de la partie sélectionnée et n’enregistre aucun point.</p></div>
       </div>
 
       <div class="voice-test-roster">
@@ -2531,12 +2527,13 @@ async function startVoiceTest() {
   await unlockAudio();
 
   voiceTest.enabled = true;
+  voiceTest.team = null;
   voiceTest.phase = 'idle';
   voiceTest.pauseAfterResult = false;
   voiceTest.detailRestarts = 0;
   voiceTest.lastTranscript = '';
   resetVoiceDetailCollector(voiceTest);
-  setVoiceTestStatus('Micro actif — dis « Ajouter un but ».', 'listening');
+  setVoiceTestStatus('Micro actif — dis « but pâles » ou « but foncés ».', 'listening');
 
   if (!voiceTest.recognition) {
     const recognition = new SpeechRecognitionCtor();
@@ -2553,7 +2550,7 @@ async function startVoiceTest() {
       setVoiceTestStatus(
         voiceTest.phase === 'details'
           ? 'Commande détectée — dis toute la phrase du but.'
-          : 'Micro actif — dis « Ajouter un but ».',
+          : 'Micro actif — dis « but pâles » ou « but foncés ».',
         voiceTest.phase === 'details' ? 'waiting' : 'listening'
       );
     };
@@ -2632,6 +2629,7 @@ function startVoiceTestRecognition() {
 
 function stopVoiceTest(message='Laboratoire vocal désactivé.', rerender=true) {
   voiceTest.enabled = false;
+  voiceTest.team = null;
   voiceTest.phase = 'idle';
   voiceTest.pauseAfterResult = false;
   voiceTest.detailRestarts = 0;
@@ -2686,9 +2684,10 @@ async function handleVoiceTestRecognitionResult(event) {
 
       if (triggered) {
         voiceTest.phase = 'details';
+        voiceTest.team = triggered.hit.team;
         voiceTest.detailRestarts = 0;
         resetVoiceDetailCollector(voiceTest);
-        setVoiceTestStatus('Commande « Ajouter un but » détectée — dis toute la phrase du but.', 'waiting');
+        setVoiceTestStatus(`But${triggered.hit.team ? (triggered.hit.team==='light'?' Pâles':' Foncés') : ''} détecté — dis le buteur et les aides.`, 'waiting');
         voiceBeep('trigger');
         restartVoiceTestDetailTimeout();
 
@@ -2707,6 +2706,7 @@ async function handleVoiceTestRecognitionResult(event) {
 
     if (voiceTest.phase === 'details') {
       const hit = findVoiceTrigger(normalizedPrimary);
+      updateVoiceTeamContext(voiceTest,hit?.team);
       const detailText = (hit ? normalizedPrimary.slice(hit.end) : normalizedPrimary).trim();
       if (!detailText) continue;
 
@@ -2745,14 +2745,16 @@ async function finalizeVoiceTestDetails() {
 async function processVoiceTestAlternatives(options) {
   if (!voiceTest.enabled || voiceTest.phase !== 'details' || voiceTest.pauseAfterResult) return;
 
-  const parses = options
+  const firstParsed = parseVoiceTestDetails(options[0] || '');
+  const parses = firstParsed.ok ? options
     .map(value => ({text:value, parsed:parseVoiceTestDetails(value)}))
     .filter(item => item.parsed?.ok)
-    .sort((a,b) => b.parsed.confidence - a.parsed.confidence);
+    .sort((a,b) => b.parsed.confidence - a.parsed.confidence) : [];
+  const identities = new Set(parses.map(p => `${p.parsed.scorerId}|${p.parsed.assists.slice().sort().join(',')}`));
 
-  if (!parses.length) {
+  if (!parses.length || identities.size > 1) {
     const transcript = options[0] || '';
-    const fallback = parseVoiceTestDetails(transcript);
+    const fallback = identities.size > 1 ? {message:'Plusieurs interprétations désignent des joueurs différents. Répète les noms complets.'} : firstParsed;
     voiceTest.lastTranscript = transcript;
     updateVoiceTestHeard(transcript);
     const message = fallback?.message || 'Je n’ai pas reconnu le buteur.';
@@ -2765,10 +2767,11 @@ async function processVoiceTestAlternatives(options) {
     });
     voiceTest.results = voiceTest.results.slice(0,12);
     voiceTest.phase = 'idle';
+    voiceTest.team = null;
     voiceTest.pauseAfterResult = false;
     clearTimeout(voiceTest.detailTimer);
     resetVoiceDetailCollector(voiceTest);
-    setVoiceTestStatus(`${message} Je continue à écouter : dis « Ajouter un but » pour réessayer.`, 'error');
+    setVoiceTestStatus(`${message} Je continue à écouter : redis « but pâles » ou « but foncés » pour réessayer.`, 'error');
     voiceBeep('error');
     render();
     return;
@@ -2778,7 +2781,7 @@ async function processVoiceTestAlternatives(options) {
   const parsed = best.parsed;
   const assistNames = parsed.assists.map(id=>playerName(findPlayer(id))).filter(Boolean);
   const assistLabel = assistNames.length ? ` · aides ${assistNames.join(' et ')}` : ' · sans aide';
-  const summary = `SIMULATION — But ${playerName(parsed.scorer)}${assistLabel}`;
+  const summary = `SIMULATION — But ${parsed.team ? (parsed.team==='light'?'Pâles':'Foncés')+' · ' : ''}${playerName(parsed.scorer)}${assistLabel}`;
 
   voiceTest.results.unshift({
     ok:true,
@@ -2790,10 +2793,11 @@ async function processVoiceTestAlternatives(options) {
   voiceTest.results = voiceTest.results.slice(0,12);
   voiceTest.lastTranscript = best.text;
   voiceTest.phase = 'idle';
+    voiceTest.team = null;
   voiceTest.pauseAfterResult = false;
   clearTimeout(voiceTest.detailTimer);
   resetVoiceDetailCollector(voiceTest);
-  setVoiceTestStatus(`${summary} · rien n’a été enregistré. Écoute continue : dis « Ajouter un but » pour un autre essai.`, 'success');
+  setVoiceTestStatus(`${summary} · rien n’a été enregistré. Écoute continue : redis « but pâles » ou « but foncés » pour un autre essai.`, 'success');
   voiceBeep('success');
   render();
 }
@@ -2806,29 +2810,13 @@ function parseVoiceTestDetails(text) {
     return {ok:false, cancelled:true, message:'Commande annulée.'};
   }
 
-  const players = activePlayers();
-  const mentions = findVoicePlayerMentions(normalized, players);
-  if (!mentions.length) {
-    return {ok:false, message:'Aucun nom de joueur reconnu.'};
-  }
-
-  const scorer = mentions[0].player;
-  const noAssist = /\b(sans\s+(aide|aides|passe|passes)|aucune?\s+(aide|passe))\b/.test(normalized);
-  const assistMentions = noAssist ? [] : mentions.slice(1);
-
-  if (assistMentions.length > 2) {
-    return {ok:false, message:'Plus de deux aides ont été reconnues.'};
-  }
-
-  const assists = [];
-  for (const mention of assistMentions) {
-    if (mention.player.id === scorer.id) continue;
-    if (!assists.includes(mention.player.id)) assists.push(mention.player.id);
-  }
-
-  const confidenceMentions = mentions.slice(0, 1 + assists.length);
-  const confidence = confidenceMentions.reduce((sum,item)=>sum+item.score,0) / Math.max(1,confidenceMentions.length);
-  return {ok:true, scorer, scorerId:scorer.id, assists, confidence};
+  const context = voiceTeamContext(normalized,voiceTest.team || null);
+  if (!context.ok) return context;
+  if (context.team && !state.currentMatch) return {ok:false,message:'Sélectionne une partie et ses alignements pour tester « but pâles » ou « but foncés ».'};
+  const players = context.team ? voiceLineupPlayers(context.team) : activePlayers();
+  if (!players.length) return {ok:false,message:context.team ? `Aucun joueur n’est assigné chez les ${context.team==='light'?'Pâles':'Foncés'} dans la partie sélectionnée.` : 'Aucun joueur disponible.'};
+  const parsed = parseVoiceRosterDetails(context.text,players);
+  return parsed.ok ? {...parsed,team:context.team} : context.team ? {...parsed,message:`Chez les ${context.team==='light'?'Pâles':'Foncés'} : ${parsed.message}`} : parsed;
 }
 
 function restartVoiceTestDetailTimeout() {

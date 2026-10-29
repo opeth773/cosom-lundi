@@ -61,7 +61,7 @@ final class GoogleStreamingVoiceEngine implements NativeSpeech.Engine {
         intent.putExtra(RecognizerIntent.EXTRA_AUDIO_SOURCE_SAMPLING_RATE,RATE);
         intent.putExtra(RecognizerIntent.EXTRA_SEGMENTED_SESSION,RecognizerIntent.EXTRA_AUDIO_SOURCE);
         ArrayList<String> bias=new ArrayList<>();
-        bias.add("ajouter un but");bias.add("arrête le test");bias.add("sans aide");bias.add("assisté de");
+        bias.add("but pâles");bias.add("but foncés");bias.add("ajouter un but");bias.add("arrête le test");bias.add("sans aide");bias.add("assisté de");
         if(names!=null) for(int i=0;i<Math.min(names.length(),200);i++) {
             String name=names.optString(i).trim();
             if(!name.isEmpty() && name.length()<=100)bias.add(name);

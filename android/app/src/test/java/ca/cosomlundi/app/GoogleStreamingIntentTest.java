@@ -35,6 +35,6 @@ public class GoogleStreamingIntentTest {
         JSONArray names=new JSONArray();
         for(int i=0;i<1000;i++)names.put("Joueur "+i);
         Intent request=GoogleStreamingVoiceEngine.request(null,names);
-        assertEquals(204,request.getStringArrayListExtra(RecognizerIntent.EXTRA_BIASING_STRINGS).size());
+        assertEquals(206,request.getStringArrayListExtra(RecognizerIntent.EXTRA_BIASING_STRINGS).size());
     }
 }

@@ -151,6 +151,11 @@ public final class MainActivity extends ComponentActivity {
     private void handle(JSONObject message) {
         String id = message.optString("id");
         switch (message.optString("action")) {
+            case "speechCapabilities":
+                JSONObject capabilities = new JSONObject();
+                try { capabilities.put("googleStreaming", android.os.Build.VERSION.SDK_INT >= 33 && GoogleStreamingVoiceEngine.googleService(this) != null); } catch (Exception ignored) {}
+                reply(id, capabilities, null);
+                break;
             case "speechStart":
                 if (foreground) speech.start(message);
                 break;

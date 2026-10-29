@@ -21,7 +21,7 @@ with zipfile.ZipFile(apk) as archive:
             assert archive.read(asset) == source.read_bytes(), f"Stale voice model asset: {asset}"
     assert "assets/voice-model-fr/am/final.mdl" in names, "Missing offline voice model"
     assert not any(name.endswith((".jks", ".p12", ".keystore")) for name in names)
-release = root / "releases/Cosom-Android-1.0.0-preview.3.apk"
+release = root / "releases/Cosom-Android-1.0.0-preview.4.apk"
 release.parent.mkdir(exist_ok=True)
 shutil.copy2(apk, release)
 digest = hashlib.sha256(release.read_bytes()).hexdigest()

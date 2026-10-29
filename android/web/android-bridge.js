@@ -30,7 +30,8 @@
       speech.set(this._id, this);
       send({action: 'speechStart', id: this._id, lang: this.lang,
         continuous: this.continuous, interimResults: this.interimResults,
-        maxAlternatives: this.maxAlternatives});
+        maxAlternatives: this.maxAlternatives, engine: window.CosomAndroid.getSpeechEngine(),
+        vocabulary: Array.isArray(this.vocabulary) ? this.vocabulary.slice(0,200) : []});
     }
     stop() {
       if (this._id !== null) send({action: 'speechStop', id: this._id});
@@ -68,6 +69,18 @@
   }
 
   window.CosomAndroid = {
+    capabilities: {googleStreaming:false},
+    async initSpeech() {
+      this.capabilities = await request('speechCapabilities');
+    },
+    getSpeechEngine() {
+      const selected = window.localStorage?.getItem('cosomAndroidSpeechEngine');
+      return selected === 'google-fr-ca' && this.capabilities.googleStreaming ? 'google-fr-ca' : 'offline-fr';
+    },
+    setSpeechEngine(engine) {
+      if (!['google-fr-ca','offline-fr'].includes(engine)) throw new Error('Moteur vocal invalide.');
+      window.localStorage?.setItem('cosomAndroidSpeechEngine', engine);
+    },
     signInGoogle: () => request('googleSignIn'),
     copyText: text => request('copyText', {text}),
     saveFile: (name, text, type) => request('saveFile', {name, text, type}),

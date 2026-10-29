@@ -26,7 +26,7 @@ synchroniser la ligue, comme dans la PWA. L'APK ne promet pas un mode hors ligne
 
 ## Installation et connexion Google
 
-Installer `releases/Cosom-Android-1.0.0-preview.3.apk` sur le téléphone. Android peut
+Installer `releases/Cosom-Android-1.0.0-preview.4.apk` sur le téléphone. Android peut
 demander d'autoriser l'installation depuis le navigateur ou le gestionnaire de
 fichiers utilisé. L'APK est signée avec une clé Android dédiée et porte le nom
 **Cosom Android**, pour la distinguer de la PWA installée.
@@ -51,8 +51,8 @@ ne peuvent pas la remplacer directement.
 
 ## Commandes vocales Android
 
-La version `1.0.0-preview.3` remplace entièrement `SpeechRecognizer` et ses
-sessions répétées par **AudioRecord + Vosk 0.3.75**, avec le modèle français
+Le mode hors ligne introduit en version 3 et conservé en version 4 remplace
+les sessions répétées de `SpeechRecognizer` par **AudioRecord + Vosk 0.3.75**, avec le modèle français
 `vosk-model-small-fr-0.22`. Un seul flux PCM 16 kHz reste ouvert depuis
 l'activation jusqu'à l'arrêt demandé. La fin d'une phrase finalise uniquement sa
 transcription, sans arrêter ou redémarrer le microphone. Aucun son système de
@@ -61,7 +61,7 @@ commande et son résultat restent disponibles.
 
 - Le micro demande la permission Android à sa première utilisation.
 - Le modèle est extrait sur l'appareil au premier démarrage du mode vocal.
-- La reconnaissance se fait localement, sans envoyer l'audio à un serveur.
+- En mode hors ligne, la reconnaissance se fait localement, sans envoyer l'audio à un serveur.
 - Le laboratoire reste actif après une simulation, un nom non reconnu et un
   silence. Il attend les détails du but sans minuterie d'inactivité.
 - Après chaque résultat, dire à nouveau « Ajouter un but » pour un autre essai.
@@ -69,6 +69,26 @@ commande et son résultat restent disponibles.
   ferme le micro. La mise en arrière-plan et les pertes réelles d'accès au
   microphone sont traitées explicitement, sans boucle de redémarrage.
 - Les transcriptions tardives après l'arrêt sont ignorées.
+
+### Option Google en français canadien (version 4)
+
+Le choix par défaut reste le moteur hors ligne. Dans **Admin → Laboratoire →
+Reconnaissance vocale**, sélectionner **Google — français canadien** pour essayer
+la reconnaissance `fr-CA` du service Google installé. Les noms de la
+ligue sont transmis comme indices (`EXTRA_BIASING_STRINGS`). Le choix est conservé
+sur l'appareil et s'applique aussi au mode vocal des parties, où le même sélecteur
+est accessible aux comptes normaux.
+
+Ce mode nécessite Android 13+, un service de reconnaissance Google accessible et
+Internet. **L'audio est transmis à Google dans ce mode.** L'application fournit un
+flux PCM via `EXTRA_AUDIO_SOURCE`, demande
+`EXTRA_SEGMENTED_SESSION=EXTRA_AUDIO_SOURCE` et traite `onSegmentResults` sans
+rouvrir le microphone. Elle ne relance pas une session terminée par le fournisseur.
+Les fournisseurs peuvent ignorer ces fonctionnalités : les erreurs et fins de
+session non segmentées sont affichées, sans bascule silencieuse vers le moteur
+hors ligne. La compatibilité et la précision québécoise doivent être confirmées
+sur le téléphone. Les tests automatisés valident les paramètres et le contrôleur,
+pas le service Google réel.
 
 Le modèle reconnaît le français général ; la précision des noms et des accents
 québécois dans le bruit du gym doit être validée sur téléphone. Le même

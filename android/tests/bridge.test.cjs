@@ -111,7 +111,7 @@ test('lab does not restart a recorder when an unexpected end is reported', async
   let starts=0;
   const voiceTest={enabled:false,recognition:null};
   const ctx=vm.createContext({window:{CosomAndroid:{}},voiceTest,voice:{enabled:false},
-    isAdmin:()=>true,activePlayers:()=>[{}],unlockAudio:async()=>{},resetVoiceDetailCollector:()=>{},
+    isAdmin:()=>true,activePlayers:()=>[{}],playerName:()=> 'Marc',unlockAudio:async()=>{},resetVoiceDetailCollector:()=>{},
     setVoiceTestStatus:()=>{},render:()=>{},SpeechRecognitionCtor:function(){},
     startVoiceTestRecognition:()=>starts++,
     stopVoiceTest:()=>{voiceTest.enabled=false;}});
@@ -169,4 +169,21 @@ test('spoken stop commands are explicit and do not match scoring phrases', () =>
   }
   for(const text of ['arrête le test','arrêter le micro',"arrête l’écoute",'stop le test'])assert.equal(ctx.isVoiceTestStopCommand(text),true,text);
   for(const text of ['ajouter un but','Marc sans aide','arrêt du gardien'])assert.equal(ctx.isVoiceTestStopCommand(text),false,text);
+});
+
+test('Google Canadian French mode is explicit, persisted and carries actual player hints', () => {
+  const {window,messages}=setup();
+  const stored=new Map();
+  window.localStorage={getItem:key=>stored.get(key),setItem:(key,value)=>stored.set(key,value)};
+  assert.equal(window.CosomAndroid.getSpeechEngine(),'offline-fr');
+  window.CosomAndroid.capabilities.googleStreaming=true;
+  window.CosomAndroid.setSpeechEngine('google-fr-ca');
+  const recognizer=new window.SpeechRecognition();
+  recognizer.vocabulary=['Jean-François Tremblay','Éric Gagnon'];
+  recognizer.start();
+  assert.equal(messages[0].engine,'google-fr-ca');
+  assert.deepEqual(messages[0].vocabulary,['Jean-François Tremblay','Éric Gagnon']);
+  assert.equal(messages[0].lang,'fr-CA');
+  window.CosomAndroid.capabilities.googleStreaming=false;
+  assert.equal(window.CosomAndroid.getSpeechEngine(),'offline-fr');
 });

@@ -22,7 +22,7 @@ final class NativeSpeech {
         void error(String message);
     }
     interface Factory {
-        void prepare(Prepared callback);
+        void prepare(JSONObject options, Prepared callback);
         void close();
     }
     private final MainActivity activity;
@@ -33,14 +33,16 @@ final class NativeSpeech {
     private boolean awaitingPermission;
     private boolean resumeAfterPermission;
     private String lastPartial = "";
+    private JSONObject options;
 
-    NativeSpeech(MainActivity activity) { this(activity, new OfflineVoiceEngine(activity)); }
+    NativeSpeech(MainActivity activity) { this(activity, new AdaptiveVoiceFactory(activity)); }
     NativeSpeech(MainActivity activity, Factory factory) { this.activity = activity; this.factory = factory; }
 
     void start(JSONObject options) {
         abort();
         id = options.optString("id");
         lastPartial = "";
+        this.options = options;
         if (activity.checkSelfPermission(Manifest.permission.RECORD_AUDIO) != PackageManager.PERMISSION_GRANTED) {
             awaitingPermission = true;
             activity.requestPermissions(new String[]{Manifest.permission.RECORD_AUDIO}, MICROPHONE_REQUEST);
@@ -60,7 +62,7 @@ final class NativeSpeech {
         if (id == null || !activity.isForeground()) { abort(); return; }
         final int token = ++generation;
         emit("loading");
-        factory.prepare(new Prepared() {
+        factory.prepare(options, new Prepared() {
             private boolean current() { return id != null && token == generation; }
             @Override public void ready(Engine prepared) {
                 if (!current() || !activity.isForeground()) { prepared.close(); return; }

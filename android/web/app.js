@@ -109,6 +109,7 @@ async function boot() {
   registerShellServiceWorker();
   renderBoot('Connexion à Firebase…');
   try {
+    if (window.CosomAndroid) await window.CosomAndroid.initSpeech();
     const configResponse = await fetch('/__/firebase/init.json', {cache: 'no-store'});
     if (!configResponse.ok) throw new Error('Configuration Firebase introuvable.');
     const firebaseConfig = await configResponse.json();
@@ -1230,6 +1231,14 @@ root.addEventListener('click', async e => {
 });
 
 root.addEventListener('change', async e => {
+  if (e.target.dataset.change === 'android-voice-engine' && window.CosomAndroid) {
+    if (voiceTest.enabled || voice.enabled) return;
+    window.CosomAndroid.setSpeechEngine(e.target.value);
+    voiceTest.statusKind = 'idle';
+    voice.statusKind = 'idle';
+    render();
+    return;
+  }
   const action = e.target.dataset.change;
   try {
     if (action==='select-match' && e.target.value) selectMatch(e.target.value);
@@ -1778,18 +1787,26 @@ async function exportLeagueJson() {
 function openModal(body) { modal.innerHTML=`<div class="modal-inner"><div class="modal-head"><strong>COSOM</strong><button type="button" class="btn small ghost" data-modal-close>✕</button></div><div class="modal-body">${body}</div></div>`; if(!modal.open) modal.showModal(); }
 
 // ---------- Voice scoring ----------
+function renderAndroidSpeechEngineChoice() {
+  return `${window.CosomAndroid ? `<label class="muted" for="androidSpeechEngine">Reconnaissance vocale</label>
+      <select id="androidSpeechEngine" data-change="android-voice-engine" ${voiceTest.enabled || voice.enabled ? 'disabled' : ''}>
+        <option value="offline-fr" ${window.CosomAndroid.getSpeechEngine()==='offline-fr'?'selected':''}>Français hors ligne — modèle général</option>
+        <option value="google-fr-ca" ${window.CosomAndroid.getSpeechEngine()==='google-fr-ca'?'selected':''} ${window.CosomAndroid.capabilities.googleStreaming?'':'disabled'}>Google — français canadien (Internet, Android 13+)</option>
+      </select><p class="tiny muted">Le mode Google envoie l’audio à Google et propose les noms de la ligue comme indices. Le flux continu dépend du service installé ; aucune boucle de redémarrage n’est utilisée. Le choix s’applique aussi au mode vocal des parties.</p>` : ''}`;
+}
+
 function renderVoiceScoring(current) {
   const supported = !!SpeechRecognitionCtor;
   const live = current?.status === 'live';
   const active = voice.enabled && voice.matchId === current?.id;
-  const status = active ? voice.status : (
+  const status = active || voice.statusKind === 'error' ? voice.status : (
     !supported
       ? 'Reconnaissance vocale non disponible dans ce navigateur.'
       : live
         ? 'Prêt. Active le micro puis dis « Ajouter un but ».'
         : 'Le mode vocal devient disponible dès que la partie est démarrée.'
   );
-  const kind = active ? voice.statusKind : (!supported ? 'error' : 'idle');
+  const kind = active || voice.statusKind === 'error' ? voice.statusKind : (!supported ? 'error' : 'idle');
   const buttonLabel = active ? 'Désactiver le micro' : 'Activer le mode vocal';
   const disabled = !supported || !live;
 
@@ -1803,6 +1820,7 @@ function renderVoiceScoring(current) {
         </div>
         <button type="button" class="btn ${active?'danger':'primary'} voice-toggle" data-action="toggle-voice" ${disabled?'disabled':''}>${buttonLabel}</button>
       </div>
+      ${renderAndroidSpeechEngineChoice()}
       <div id="voiceStatus" class="voice-status ${escAttr(kind)}" aria-live="polite">
         <span class="voice-status-dot" aria-hidden="true"></span>
         <span>${esc(status)}</span>
@@ -1843,6 +1861,7 @@ async function startVoiceMode() {
   if (!voice.recognition) {
     const recognition = new SpeechRecognitionCtor();
     recognition.lang = 'fr-CA';
+    recognition.vocabulary = activePlayers().map(p => playerName(p));
     recognition.continuous = true;
     recognition.interimResults = true;
     recognition.maxAlternatives = 3;
@@ -1883,6 +1902,7 @@ async function startVoiceMode() {
       voice.running = false;
       if (code === 'service-not-allowed' && event?.message) {
         stopVoiceMode(event.message, false);
+        voice.statusKind = 'error';
         render();
         return;
       }
@@ -1892,7 +1912,8 @@ async function startVoiceMode() {
         return;
       }
       if (code === 'audio-capture') {
-        stopVoiceMode('Aucun microphone disponible.', false);
+        stopVoiceMode(event?.message || 'Aucun microphone disponible.', false);
+        voice.statusKind = 'error';
         render();
         return;
       }
@@ -1920,6 +1941,7 @@ function startVoiceRecognition() {
   if (!voice.enabled || !voice.recognition || voice.running) return;
   try {
     voice.startedAt = Date.now();
+    voice.recognition.vocabulary = activePlayers().map(p => playerName(p));
     voice.recognition.start();
   } catch (err) {
     if (err?.name !== 'InvalidStateError') {
@@ -2423,12 +2445,12 @@ function renderVoiceTestLab() {
   const supported = !!SpeechRecognitionCtor;
   const active = voiceTest.enabled;
   const players = activePlayers();
-  const status = active
+  const status = active || voiceTest.statusKind === 'error'
     ? voiceTest.status
     : supported
       ? 'Prêt à tester. Rien ne sera écrit dans Firebase.'
       : 'Reconnaissance vocale non disponible dans ce navigateur.';
-  const kind = active ? voiceTest.statusKind : (!supported ? 'error' : 'idle');
+  const kind = active || voiceTest.statusKind === 'error' ? voiceTest.statusKind : (!supported ? 'error' : 'idle');
   const buttonLabel = active ? 'Arrêter le test' : 'Activer le test';
   const buttonClass = active ? 'danger' : 'primary';
 
@@ -2457,6 +2479,7 @@ function renderVoiceTestLab() {
         <button type="button" class="btn ${buttonClass} voice-toggle" data-action="toggle-voice-test" ${supported?'':'disabled'}>${buttonLabel}</button>
       </div>
 
+      ${renderAndroidSpeechEngineChoice()}
       <div class="voice-test-safety">
         <strong>Zéro écriture Firebase.</strong>
         Tout reste temporairement sur cet appareil et disparaît au rechargement.
@@ -2518,6 +2541,7 @@ async function startVoiceTest() {
   if (!voiceTest.recognition) {
     const recognition = new SpeechRecognitionCtor();
     recognition.lang = 'fr-CA';
+    recognition.vocabulary = activePlayers().map(p => playerName(p));
     recognition.continuous = true;
     recognition.interimResults = true;
     recognition.maxAlternatives = 3;
@@ -2558,6 +2582,7 @@ async function startVoiceTest() {
       voiceTest.running = false;
       if (code === 'service-not-allowed' && event?.message) {
         stopVoiceTest(event.message, false);
+        voiceTest.statusKind = 'error';
         render();
         return;
       }
@@ -2567,7 +2592,8 @@ async function startVoiceTest() {
         return;
       }
       if (code === 'audio-capture') {
-        stopVoiceTest('Aucun microphone disponible.', false);
+        stopVoiceTest(event?.message || 'Aucun microphone disponible.', false);
+        voiceTest.statusKind = 'error';
         render();
         return;
       }
@@ -2595,6 +2621,7 @@ function startVoiceTestRecognition() {
   if (!voiceTest.enabled || !voiceTest.recognition || voiceTest.running) return;
   try {
     voiceTest.startedAt = Date.now();
+    voiceTest.recognition.vocabulary = activePlayers().map(p => playerName(p));
     voiceTest.recognition.start();
   } catch (err) {
     if (err?.name !== 'InvalidStateError') {

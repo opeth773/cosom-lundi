@@ -32,7 +32,7 @@ final class OfflineVoiceEngine implements NativeSpeech.Factory {
 
     OfflineVoiceEngine(Context context) { this.context = context.getApplicationContext(); }
 
-    @Override public void prepare(NativeSpeech.Prepared callback) {
+    @Override public void prepare(org.json.JSONObject options, NativeSpeech.Prepared callback) {
         if (closed) { callback.error("Moteur vocal fermé."); return; }
         worker.execute(() -> {
             try {

@@ -83,7 +83,7 @@ public class NativeSpeechTest {
         NativeSpeech.Prepared pending;
         int prepares;
         boolean deferred;
-        public void prepare(NativeSpeech.Prepared callback) {
+        public void prepare(JSONObject options, NativeSpeech.Prepared callback) {
             prepares++; pending=callback;
             if(!deferred)callback.ready(engine);
         }

@@ -9,7 +9,7 @@ import {
   writeBatch, serverTimestamp, Timestamp, onSnapshot, query, orderBy, where, runTransaction, arrayUnion, arrayRemove, deleteField
 } from 'https://www.gstatic.com/firebasejs/12.19.0/firebase-firestore.js';
 
-const APP_VERSION = '8.15.0';
+const APP_VERSION = '8.16.0';
 const root = document.getElementById('app');
 const modal = document.getElementById('modal');
 const toastEl = document.getElementById('toast');
@@ -999,7 +999,7 @@ function renderStats() {
     .sort((a,b)=>(a.avg-b.avg)||a.name.localeCompare(b.name));
   return `<div class="card"><h2>Statistiques de la saison</h2><div class="kpi-grid"><div class="kpi"><strong>${state.stats.finalMatches}</strong><span>matchs</span></div><div class="kpi"><strong>${state.stats.totalGoals}</strong><span>buts</span></div><div class="kpi"><strong>${activePlayers().length}</strong><span>joueurs actifs</span></div></div><p class="muted" style="margin-top:10px">Les matchs joués sont comptés selon la position de chaque match. Un joueur qui garde les buts une soirée apparaît donc aussi dans les statistiques des gardiens.</p></div>
     <div class="card"><h3 class="card-heading">Joueurs</h3>${skaters.length?`<table><thead><tr><th>Joueur</th><th>MJ</th><th>B</th><th>A</th><th>PTS</th><th>ABS</th></tr></thead><tbody>${skaters.map(s=>`<tr><td>${esc(s.name)}</td><td>${s.skaterGp}</td><td>${s.goals}</td><td>${s.assists}</td><td><strong>${s.points}</strong></td><td>${s.absences}</td></tr>`).join('')}</tbody></table>`:'<div class="empty">Aucune statistique.</div>'}</div>
-    <div class="card"><h3 class="card-heading">Gardiens</h3>${goalies.length?`<table><thead><tr><th>Gardien</th><th>MJ</th><th>BA</th><th>MOY</th><th>ABS</th></tr></thead><tbody>${goalies.map(s=>`<tr><td>${esc(s.name)}</td><td>${s.goalieGp}</td><td>${s.ga}</td><td><strong>${s.avg.toFixed(2).replace('.',',')}</strong></td><td>${s.absences}</td></tr>`).join('')}</tbody></table>`:'<div class="empty">Aucun gardien.</div>'}</div>
+    <div class="card"><h3 class="card-heading">Gardiens</h3>${goalies.length?`<div class="goalie-stats-scroll" role="region" aria-label="Statistiques des gardiens" tabindex="0"><table><thead><tr><th>Gardien</th><th>MJ</th><th title="Victoires">V</th><th title="Défaites">D</th><th title="Matchs nuls">N</th><th>BA</th><th>MOY</th><th>ABS</th></tr></thead><tbody>${goalies.map(s=>`<tr><td>${esc(s.name)}</td><td>${s.goalieGp}</td><td>${s.goalieWins}</td><td>${s.goalieLosses}</td><td>${s.goalieTies}</td><td>${s.ga}</td><td><strong>${s.avg.toFixed(2).replace('.',',')}</strong></td><td>${s.absences}</td></tr>`).join('')}</tbody></table></div><p class="muted goalie-record-help">V : victoires · D : défaites · N : matchs nuls. Résultat de l’équipe pour chaque gardien aligné, seulement dans les parties terminées.</p>`:'<div class="empty">Aucun gardien.</div>'}</div>
     <div class="card"><h3 class="card-heading">Historique</h3>${state.stats.history.length?state.stats.history.map(h=>`<button type="button" class="history-match-row" data-action="open-history-match" data-match="${h.id}" aria-label="Voir les détails du match du ${escAttr(formatDate(h.startAt))}"><div><div class="person-name">${formatDate(h.startAt)}</div><div class="person-meta">Foncés ${h.dark} − ${h.light} Pâles</div></div><div class="history-match-link"><span class="pill">Final</span><span aria-hidden="true">›</span></div></button>`).join(''):'<div class="empty">Aucun match terminé.</div>'}</div>`;
 }
 
@@ -1126,7 +1126,7 @@ async function loadStats() {
   state.statsLoading = true; render();
   try {
     const finals = state.matches.filter(m=>m.status==='final');
-    const playerMap = new Map(state.players.map(p=>[p.id,{id:p.id,name:playerName(p),type:p.type,skaterGp:0,goalieGp:0,goals:0,assists:0,points:0,absences:0,ga:0,avg:0}]));
+    const playerMap = new Map(state.players.map(p=>[p.id,{id:p.id,name:playerName(p),type:p.type,skaterGp:0,goalieGp:0,goalieWins:0,goalieLosses:0,goalieTies:0,goals:0,assists:0,points:0,absences:0,ga:0,avg:0}]));
     const history = [];
     let totalGoals = 0;
     for (const m of finals) {
@@ -1155,6 +1155,11 @@ async function loadStats() {
           if (position==='goalie') {
             s.goalieGp++;
             s.ga += team==='dark'?light:dark;
+            const goalsFor = team==='dark'?dark:light;
+            const goalsAgainst = team==='dark'?light:dark;
+            if (goalsFor > goalsAgainst) s.goalieWins++;
+            else if (goalsFor < goalsAgainst) s.goalieLosses++;
+            else s.goalieTies++;
           } else {
             s.skaterGp++;
           }

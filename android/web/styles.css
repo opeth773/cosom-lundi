@@ -4181,3 +4181,9 @@ tbody td:first-child {
     background: #462328;
   }
 }
+
+/* Keep every goalie record column accessible on narrow screens. */
+.goalie-stats-scroll { max-width: 100%; overflow-x: auto; }
+.goalie-stats-scroll table { min-width: 500px; }
+.goalie-stats-scroll th:not(:first-child), .goalie-stats-scroll td:not(:first-child) { white-space: nowrap; }
+.goalie-record-help { margin-top: 10px; }

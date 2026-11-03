@@ -14,8 +14,8 @@ android {
         applicationId = "ca.cosomlundi.app"
         minSdk = 26
         targetSdk = 36
-        versionCode = 7
-        versionName = "1.0.0-preview.7"
+        versionCode = 8
+        versionName = "1.0.0-preview.8"
         buildConfigField("String", "GOOGLE_WEB_CLIENT_ID", "\"$googleClient\"")
     }
     testOptions { unitTests.isIncludeAndroidResources = true }

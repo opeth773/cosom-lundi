@@ -26,7 +26,7 @@ synchroniser la ligue, comme dans la PWA. L'APK ne promet pas un mode hors ligne
 
 ## Installation et connexion Google
 
-Installer `releases/Cosom-Android-1.0.0-preview.7.apk` sur le téléphone. Android peut
+Installer `releases/Cosom-Android-1.0.0-preview.8.apk` sur le téléphone. Android peut
 demander d'autoriser l'installation depuis le navigateur ou le gestionnaire de
 fichiers utilisé. L'APK est signée avec une clé Android dédiée et porte le nom
 **Cosom Android**, pour la distinguer de la PWA installée.
@@ -166,6 +166,21 @@ le vocabulaire suggéré et l'interprétation des noms. Les tests de transcripti
 portent sur les textes signalés ; la précision acoustique sur un téléphone
 physique n'est pas mesurée par ces tests. Aucun service vocal payant ni nouvel
 envoi d'audio n'est ajouté. La capture audio continue reste inchangée.
+
+### Victoires et défaites des gardiens (version 8)
+
+Les statistiques affichent V (victoires), D (défaites) et N (matchs nuls), comme
+la PWA 8.16. Le résultat est calculé pour chaque gardien aligné à partir du score
+des parties terminées, selon l'équipe et la position de chaque match. Les joueurs
+et remplaçants devenus gardiens pour un match sont inclus. Les matchs en cours ou
+à venir ne comptent pas. Une égalité, y compris 0–0, augmente N seulement.
+
+Le calcul inclut automatiquement les anciennes parties, leurs alignements finaux
+corrigés et les anciennes parties sans instantané (assignations de remplacement).
+Aucun compteur persistant ni migration Firebase n'est ajouté : le recalcul évite
+les doublons après correction d'un alignement. Si plusieurs gardiens sont alignés
+dans une équipe, chacun reçoit le résultat de cette équipe, comme leurs MJ et BA.
+Le tableau défile horizontalement sur les petits écrans. Le vocal reste inchangé.
 
 ## Compiler et tester
 
